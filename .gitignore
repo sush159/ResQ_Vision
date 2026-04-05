@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.env
+venv/
+env/
+
+# Model weights (too large for git)
+*.pt
+*.onnx
+*.engine
+
+# Uploads
+uploads/
+
+# Training runs (large output files)
+runs/
+
+# Dataset files (too large for git)
+datasets/
+merged_dataset/
+data/
+dataset_for_colab.zip
+*.zip
+*.jpg
+*.jpeg
+*.png
+*.JPG
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log

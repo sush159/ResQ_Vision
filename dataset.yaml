@@ -1,0 +1,31 @@
+# Rescue Vision - YOLOv8 Accident Detection Dataset Config
+#
+# Class layout:
+#   0  bicycle
+#   1  bicycle-bicycle_collision
+#   2  bicycle-object_collision
+#   3  bicycle-person_collision
+#   4  car
+#   5  car-bicycle_collision
+#   6  car-car_collision
+#   7  car-object_collision
+#   8  car-person_collision
+#   9  person
+
+path:  datasets/archive
+train: train/images
+val:   valid/images
+
+nc: 10
+
+names:
+  0: bicycle
+  1: bicycle-bicycle_collision
+  2: bicycle-object_collision
+  3: bicycle-person_collision
+  4: car
+  5: car-bicycle_collision
+  6: car-car_collision
+  7: car-object_collision
+  8: car-person_collision
+  9: person

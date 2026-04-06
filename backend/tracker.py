@@ -8,7 +8,7 @@ through occlusion, overlap, and brief disappearances.
 import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional
-from core.detector import Detection
+from backend.detector import Detection
 
 _deepsort = None
 
@@ -157,7 +157,7 @@ class VehicleTracker:
             conf     = float(dst.det_conf) if dst.det_conf is not None else 0.5
 
             # Resolve color from the detection class map
-            from core.detector import VEHICLE_COLORS
+            from backend.detector import VEHICLE_COLORS
             color = VEHICLE_COLORS.get(cls_name, (128, 128, 128))
 
             if tid in self._tracks:

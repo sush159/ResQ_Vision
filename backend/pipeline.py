@@ -8,11 +8,11 @@ import numpy as np
 import cv2
 from typing import Optional, Dict, Any, List
 
-from core.detector import VehicleDetector, Detection
-from core.tracker import VehicleTracker, Track
-from core.accident import AccidentDetector, Incident, SEVERITY_COLORS
-from core.lpr import read_plates_for_incident
-from core.enhancer import enhance_frame
+from backend.detector import VehicleDetector, Detection
+from backend.tracker import VehicleTracker, Track
+from backend.accident import AccidentDetector, Incident, SEVERITY_COLORS
+from backend.lpr import read_plates_for_incident
+from backend.enhancer import enhance_frame
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 

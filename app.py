@@ -21,7 +21,7 @@ def _get_pipeline_cls():
     global _pipeline_cls
     if _pipeline_cls is None:
         import cv2  # noqa: F401 — ensure opencv is available
-        from core.pipeline import AccidentDetectionPipeline
+        from backend.pipeline import AccidentDetectionPipeline
         _pipeline_cls = AccidentDetectionPipeline
     return _pipeline_cls
 
@@ -42,7 +42,7 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 jobs: Dict[str, dict] = {}
 
 # Mount static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
 
 # ─────────────────────────────────────────────────
@@ -51,7 +51,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_dashboard():
-    html_path = Path("static/index.html")
+    html_path = Path("frontend/index.html")
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 

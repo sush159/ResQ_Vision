@@ -7,7 +7,7 @@ import time
 import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
-from core.tracker import Track, iou
+from backend.tracker import Track, iou
 
 
 SEVERITY_THRESHOLDS = {

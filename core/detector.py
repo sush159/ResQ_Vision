@@ -68,7 +68,9 @@ class VehicleDetector:
     def __init__(self, model_size: str = "n", conf: float = 0.20):
         from ultralytics import YOLO
         import os
-        trained_model = r"C:\Users\Sushanthi\Desktop\accident\accident_best.pt"
+        from pathlib import Path
+        base_dir = Path(__file__).parent.parent
+        trained_model = str(base_dir / "accident_best.pt")
         if os.path.exists(trained_model):
             self.model = YOLO(trained_model)
         else:

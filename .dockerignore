@@ -1,0 +1,36 @@
+# Large dataset/training files — never needed at runtime
+*.zip
+datasets/
+merged_dataset/
+runs/
+uploads/
+
+# Training scripts
+train.py
+augment.py
+merge_and_remap.py
+reduce_dataset.py
+dataset.yaml
+*.ipynb
+
+# Git and IDE
+.git/
+.gitignore
+.claude/
+.vscode/
+.idea/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Docs
+*.md
+COLAB_TRAINING_GUIDE.md
+TRAINING_REPORT.md
+
+# OS
+.DS_Store
+Thumbs.db
+*.log

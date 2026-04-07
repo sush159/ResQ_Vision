@@ -16,14 +16,6 @@ from backend.enhancer import enhance_frame
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
-# Classes that are just vehicles (tracked normally)
-# 0:bicycle  1:motorcycle  2:auto-rickshaw  3:car  4:bus  5:truck  6:person
-NORMAL_CLASS_IDS = {0, 1, 2, 3, 4, 5, 6}
-
-# Classes the model directly labels as a collision event
-# 7-17 are all collision types
-COLLISION_CLASS_IDS = {7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}
-
 # Inherent severity floor per collision class.
 # Heavy vehicles (bus/truck) and person-involved = Critical.
 _CLASS_SEVERITY_FLOOR = {
@@ -45,6 +37,14 @@ _CLASS_SEVERITY_FLOOR = {
 
 _SEVERITY_RANK = {"Minor": 0, "Major": 1, "Critical": 2}
 _RANK_SEVERITY  = {0: "Minor", 1: "Major", 2: "Critical"}
+
+
+def _is_collision_class(name: str) -> bool:
+    return "collision" in name
+
+
+def _is_trackable_class(name: str) -> bool:
+    return not _is_collision_class(name)
 
 
 def _severity_from_detection(det) -> str:
@@ -91,12 +91,94 @@ class AccidentDetectionPipeline:
         self._post_alert_cooldown  = 0           # frames remaining in post-alert silence
         self._ALERT_COOLDOWN       = 90          # suppress 9s after alert to avoid spam (was 60)
 
+        self.reset_session()
+
+    def reset_session(self):
+        self.frame_number = 0
+        self._incident_counter = 0
+        self._best_collision = None
+        self._collision_streak = 0
+        self._gap_frames = 0
+        self._post_alert_cooldown = 0
+        self._fast_best_collision = None
+        self._fast_collision_streak = 0
+        self._fast_gap_frames = 0
         self.stats = {
             "total_vehicles":  0,
             "total_incidents": 0,
             "frame_count":     0,
         }
         self.enhancement_mode = "Normal"
+
+    def process_frame_fast(self, frame: np.ndarray) -> Dict[str, Any]:
+        """
+        Faster upload-time path.
+
+        It intentionally skips:
+        - DeepSORT tracking
+        - IoU/velocity fallback collision inference
+        - license-plate OCR
+
+        This returns a quick accident/no-accident verdict in seconds and keeps
+        the full pipeline for the live camera path where richer context matters.
+        """
+        self.frame_number += 1
+        self.stats["frame_count"] = self.frame_number
+
+        # For upload verdicts, stay close to the trained model's raw input and
+        # skip the heavier enhancement/tracking/OCR stack.
+        enhanced = frame
+        self.enhancement_mode = "Fast Scan"
+        all_detections = self.detector.detect(enhanced)
+
+        fh, fw = enhanced.shape[:2]
+        frame_area = max(1, fw * fh)
+
+        vehicle_dets = [d for d in all_detections if _is_trackable_class(d.class_name)]
+        self.stats["total_vehicles"] = len(vehicle_dets)
+
+        collision_dets = [
+            d for d in all_detections
+            if _is_collision_class(d.class_name) and _valid_collision_detection(d, frame_area, min_conf=0.22)
+        ]
+
+        incident: Optional[Incident] = None
+        if collision_dets:
+            self._fast_gap_frames = 0
+            best = max(collision_dets, key=lambda d: d.confidence)
+            if self._fast_best_collision is None or best.confidence > self._fast_best_collision.confidence:
+                self._fast_best_collision = best
+            self._fast_collision_streak += 1
+
+            # Critical trained classes should alert immediately even in fast mode.
+            if _severity_from_detection(best) == "Critical" and best.confidence >= 0.22:
+                incident = self._incident_from_collision_dets([best])
+            # High-confidence direct hit: fire immediately.
+            elif best.confidence >= 0.40:
+                incident = self._incident_from_collision_dets([best])
+            # Otherwise require a very short streak so uploads stay fast.
+            elif self._fast_collision_streak >= 2 and self._fast_best_collision is not None:
+                incident = self._incident_from_collision_dets([self._fast_best_collision])
+        else:
+            self._fast_gap_frames += 1
+            if self._fast_gap_frames > 1:
+                self._fast_gap_frames = 0
+                self._fast_collision_streak = 0
+                self._fast_best_collision = None
+
+        if incident:
+            self.stats["total_incidents"] += 1
+            self._fast_best_collision = None
+            self._fast_collision_streak = 0
+            self._fast_gap_frames = 0
+
+        annotated = self._annotate(enhanced, [], collision_dets, incident)
+        return {
+            "annotated_frame": annotated,
+            "stats": dict(self.stats),
+            "alert": incident.to_dict() if incident else None,
+            "enhancement_mode": self.enhancement_mode,
+        }
 
     # ------------------------------------------------------------------ #
     def process_frame(self, frame: np.ndarray) -> Dict[str, Any]:
@@ -113,7 +195,7 @@ class AccidentDetectionPipeline:
         frame_area = fw * fh
 
         # Split: normal vehicles vs model-detected collisions
-        vehicle_dets = [d for d in all_detections if d.class_id in NORMAL_CLASS_IDS]
+        vehicle_dets = [d for d in all_detections if _is_trackable_class(d.class_name)]
 
         # Filter collision detections with sanity checks to kill false positives:
         #   1. Confidence ≥ 0.45  (much higher floor than normal vehicles)
@@ -128,7 +210,7 @@ class AccidentDetectionPipeline:
             return 0.003 < frac < 0.70
 
         collision_dets = [d for d in all_detections
-                          if d.class_id in COLLISION_CLASS_IDS and _valid_collision(d)]
+                          if _is_collision_class(d.class_name) and _valid_collision(d)]
 
         # Track only normal vehicles — pass frame for DeepSORT appearance embedding
         active_tracks = self.tracker.update(vehicle_dets, enhanced)
@@ -280,3 +362,15 @@ def _draw_hud(frame: np.ndarray, stats: dict, mode: str):
         y = 22 + i * 20
         cv2.putText(frame, line, (10, y), FONT, 0.5, (0, 0, 0), 3)
         cv2.putText(frame, line, (10, y), FONT, 0.5, (0, 255, 180), 1)
+
+
+def _valid_collision_detection(det: Detection, frame_area: float, min_conf: float = 0.45) -> bool:
+    """
+    Shared collision sanity filter.
+    """
+    if det.confidence < min_conf:
+        return False
+    x1, y1, x2, y2 = det.bbox
+    area = max(0.0, (x2 - x1) * (y2 - y1))
+    frac = area / max(frame_area, 1.0)
+    return 0.003 < frac < 0.70

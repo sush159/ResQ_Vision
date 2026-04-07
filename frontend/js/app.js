@@ -1,1196 +1,1257 @@
-/* ── Rescue Vision — Command Center JS ── */
+const LOCAL_API_BASE = "http://127.0.0.1:8000";
+const API = resolveApiBase();
+const STORAGE_KEY = "resq-vision-dashboard-state";
 
-const API = "";
-let ws             = null;
-let currentJobId   = null;
-let incidentCount  = 0;
-let criticalCount  = 0;
-let majorCount     = 0;
-let minorCount     = 0;
-let frameCount     = 0;
-let vehicleCount   = 0;
-let soundEnabled   = true;
-let allIncidents   = [];
-let activeFilter   = "all";
-let _frameReceiveTime = 0;
+const state = {
+  ws: null,
+  uploadWs: null,
+  uploadJobId: null,
+  uploadSourceFps: 0,
+  uploadAlertTriggered: false,
+  cameraMode: false,
+  cameraStream: null,
+  captureTimer: null,
+  cameraVideo: null,
+  captureCanvas: null,
+  uploadInProgress: false,
+  soundEnabled: true,
+  incidents: [],
+  activeAlertFilter: "all",
+  activeHistoryFilter: "all",
+  clockTimer: null,
+  sessionTimer: null,
+  sessionStartedAt: null,
+  frameReceiveTime: 0,
+  map: null,
+  mapMarkers: [],
+  historyChart: null,
+  uploadPreviewUrl: null,
+  selectedIncidentId: null,
+  activeHospFilter: "all",
+};
 
-// ── DOM ──
-const canvas           = document.getElementById("videoCanvas");
-const ctx              = canvas.getContext("2d");
-const placeholder      = document.getElementById("placeholder");
-const dropOverlay      = document.getElementById("dropOverlay");
+const canvas = document.getElementById("videoCanvas");
+const ctx = canvas.getContext("2d");
+const uploadPreview = document.getElementById("uploadPreview");
+const placeholder = document.getElementById("placeholder");
+const uploadModal = document.getElementById("uploadModal");
+const uploadBox = document.getElementById("uploadBox");
+const fileInput = document.getElementById("fileInput");
+const btnBrowseFile = document.getElementById("btnBrowseFile");
+const btnUpload = document.getElementById("btnUpload");
+const btnCamera = document.getElementById("btnCamera");
+const btnStop = document.getElementById("btnStop");
+const soundBtn = document.getElementById("soundBtn");
+const navToggle = document.getElementById("navToggle");
+const dashboardShell = document.querySelector(".dashboard-shell");
+const sidebar = document.getElementById("sidebar");
+const statusDot = document.getElementById("statusDot");
+const statusLabel = document.getElementById("statusLabel");
+const recBadge = document.getElementById("recBadge");
+const fpsBadge = document.getElementById("fpsBadge");
+const progressFill = document.getElementById("progressFill");
+const timestampBadge = document.getElementById("timestampBadge");
 const enhancementBadge = document.getElementById("enhancementBadge");
-const progressFill     = document.getElementById("progressFill");
-const timestampBadge   = document.getElementById("timestampBadge");
-const alertList        = document.getElementById("alertList");
-const alertCountBadge  = document.getElementById("alertCountBadge");
-const uploadModal      = document.getElementById("uploadModal");
-const uploadBox        = document.getElementById("uploadBox");
-const fileInput        = document.getElementById("fileInput");
-const btnStart         = document.getElementById("btnStart");
-const btnStop          = document.getElementById("btnStop");
-const btnUpload        = document.getElementById("btnUpload");
-const btnCamera        = document.getElementById("btnCamera");
-const statusDot        = document.getElementById("statusDot");
-const statusLabel      = document.getElementById("statusLabel");
-const soundBtn         = document.getElementById("soundBtn");
-const soundIconOn      = document.getElementById("soundIconOn");
-const soundIconOff     = document.getElementById("soundIconOff");
-const screenFlash      = document.getElementById("screenFlash");
-const videoAlertBanner = document.getElementById("videoAlertBanner");
-const liveBadge        = document.getElementById("liveBadge");
-const fpsBadge         = document.getElementById("fpsBadge");
-const vidCorners       = document.getElementById("vidCorners");
-const recBadge         = document.getElementById("recBadge");
-const statusCardDot    = document.getElementById("statusCardDot");
-const statusCardValue  = document.getElementById("statusCardValue");
+const liveTicker = document.getElementById("liveTicker");
+const dispatchList = document.getElementById("dispatchList");
+const historyTimeline = document.getElementById("historyTimeline");
+const clockBadge = document.getElementById("clockBadge");
 
-const statVehicles  = document.getElementById("statVehicles");
-const statFrames    = document.getElementById("statFrames");
+const hospitalAlerts = document.getElementById("hospitalAlerts");
+const incidentDetail = document.getElementById("incidentDetail");
+const nearbyHospitalList = document.getElementById("nearbyHospitalList");
+const ambProgress = document.getElementById("ambProgress");
+const ambTime = document.getElementById("ambTime");
+const ambStatus = document.getElementById("ambStatus");
+const incidentTimeline = document.getElementById("incidentTimeline");
+const detailId = document.getElementById("detailId");
+const detailTitle = document.getElementById("detailTitle");
+const detailLoc = document.getElementById("detailLoc");
+const detailSeverity = document.getElementById("detailSeverity");
+
 const statIncidents = document.getElementById("statIncidents");
-const statCritical  = document.getElementById("statCritical");
-const statMajor     = document.getElementById("statMajor");
-const statMinor     = document.getElementById("statMinor");
-const statLatency   = document.getElementById("statLatency");
+const liveActiveAlerts = document.getElementById("liveActiveAlerts");
+const statLatency = document.getElementById("statLatency");
+const liveResolved = document.getElementById("liveResolved");
+const statVehicles = document.getElementById("statVehicles");
+const statFrames = document.getElementById("statFrames");
+const alertTotalCount = document.getElementById("alertTotalCount");
+const agenciesCount = document.getElementById("agenciesCount");
+const autoEscalatedCount = document.getElementById("autoEscalatedCount");
+const falsePositiveRate = document.getElementById("falsePositiveRate");
+const historyAvgResponse = document.getElementById("historyAvgResponse");
+const historyImprovement = document.getElementById("historyImprovement");
+const historyTotalIncidents = document.getElementById("historyTotalIncidents");
+const videoPanelTitle = document.getElementById("videoPanelTitle");
+const videoPanelSubtitle = document.getElementById("videoPanelSubtitle");
 
-// ── Audio (Web Audio API) ──
-let audioCtx = null;
-function _ensureAudio() {
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-}
-function playBeep(freq, dur, type, count) {
-  if (!soundEnabled) return;
-  try {
-    _ensureAudio();
-    for (let i = 0; i < count; i++) {
-      const osc  = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      const t    = audioCtx.currentTime + i * (dur + 0.05);
-      osc.connect(gain); gain.connect(audioCtx.destination);
-      osc.type = type; osc.frequency.setValueAtTime(freq, t);
-      gain.gain.setValueAtTime(0.2, t);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
-      osc.start(t); osc.stop(t + dur);
-    }
-  } catch (_) {}
-}
-function playAlertSound(sev) {
-  if (sev === "Critical") playBeep(660, 0.15, "square", 4);
-  else if (sev === "Major") playBeep(520, 0.18, "square", 2);
-  else playBeep(440, 0.2, "sine", 1);
-}
+const PAGE_META = {
+  live: {
+    title: "Live Monitor Dashboard",
+    subtitle: "Real-time accident detection and autonomous emergency dispatch",
+  },
+  alerts: {
+    title: "Alert & Dispatch Panel",
+    subtitle: "Autonomous multi-agency emergency notifications",
+  },
+  map: {
+    title: "Accident Map View",
+    subtitle: "Live incident locations and responder coverage",
+  },
+  history: {
+    title: "Incident Timeline & Impact",
+    subtitle: "Full history of detected incidents, actions taken, and response impact",
+  },
+  hospital: {
+    title: "Hospital Emergency Portal",
+    subtitle: "Real-time trauma alerts and response coordination",
+  },
+};
 
-// ── Sound toggle ──
-soundBtn.addEventListener("click", () => {
-  soundEnabled = !soundEnabled;
-  soundIconOn.style.display  = soundEnabled ? "block" : "none";
-  soundIconOff.style.display = soundEnabled ? "none"  : "block";
-  soundBtn.classList.toggle("muted", !soundEnabled);
-  showToast(soundEnabled ? "Sound alerts enabled" : "Sound alerts muted", "info");
-});
+const LOCATION_PRESETS = [
+  { label: "NH-44, Krishnagiri", lat: 12.5266, lng: 78.2137 },
+  { label: "Salem Bypass Road", lat: 11.6643, lng: 78.1460 },
+  { label: "Coimbatore Ring Road", lat: 11.0168, lng: 76.9558 },
+  { label: "Avinashi Road, CBE", lat: 11.0278, lng: 77.0260 },
+  { label: "Outer Ring, Hosur", lat: 12.7362, lng: 77.8323 },
+  { label: "Mettupalayam Junction", lat: 11.2990, lng: 76.9402 },
+];
 
-// ── Upload modal ──
-function openUpload()  { uploadModal.style.display = "flex"; }
-function closeUpload() { uploadModal.style.display = "none"; }
+const RESPONDERS = {
+  police: { label: "Police", color: "blue" },
+  ambulance: { label: "Ambulance", color: "green" },
+  hospital: { label: "Hospital", color: "green" },
+};
 
-uploadModal.addEventListener("click", e => { if (e.target === uploadModal) closeUpload(); });
-;
-uploadBox.addEventListener("click", () => fileInput.click());
-btnUpload.addEventListener("click", openUpload);
-fileInput.addEventListener("change", () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
-
-uploadBox.addEventListener("dragover",  e => { e.preventDefault(); uploadBox.classList.add("dragover"); });
-uploadBox.addEventListener("dragleave", ()  => uploadBox.classList.remove("dragover"));
-uploadBox.addEventListener("drop",      e  => { e.preventDefault(); uploadBox.classList.remove("dragover"); if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
-
-const videoContainer = document.querySelector(".video-wrap");
-videoContainer.addEventListener("dragover",  e => { e.preventDefault(); dropOverlay.classList.add("active"); });
-videoContainer.addEventListener("dragleave", ()  => dropOverlay.classList.remove("active"));
-videoContainer.addEventListener("drop",      e  => { e.preventDefault(); dropOverlay.classList.remove("active"); if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
-
-// ── File upload ──
-async function handleFile(file) {
-  closeUpload();
-  setStatus("uploading", "Uploading…");
-  const formData = new FormData();
-  formData.append("file", file);
-  try {
-    const res = await fetch(`${API}/api/upload`, { method: "POST", body: formData });
-    if (!res.ok) {
-      const err = await res.json();
-      showToast("Upload failed: " + (err.detail || res.status), "error");
-      setStatus("idle", "System Idle");
-      return;
-    }
-    const data = await res.json();
-    currentJobId = data.job_id;
-    setStatus("ready", "Ready — " + data.filename);
-    btnStart.disabled = false;
-    showToast("Loaded: " + data.filename, "success");
-    _promptCameraLocation();
-  } catch (err) {
-    showToast("Upload error: " + err.message, "error");
-    setStatus("idle", "System Idle");
-  }
+function resolveApiBase() {
+  const { protocol, hostname, port } = window.location;
+  if (protocol === "file:") return LOCAL_API_BASE;
+  const isLocal = hostname === "localhost" || hostname === "127.0.0.1";
+  if (isLocal && port && port !== "8000") return LOCAL_API_BASE;
+  return "";
 }
 
-// ── Controls ──
-btnStart.addEventListener("click", startProcessing);
-btnStop.addEventListener("click",  stopProcessing);
-btnCamera.addEventListener("click", startCamera);
-
-let cameraMode    = false;
-let cameraStream  = null;
-let captureTimer  = null;
-let cameraVideo   = null;
-let captureCanvas = null;
-
-function startProcessing() {
-  if (!currentJobId) return;
-  cameraMode = false;
-  resetAlerts();
-  _onSessionStart();
-  startWebSocket(currentJobId);
+function resolveWsBase() {
+  if (API) return API.replace(/^http/i, "ws");
+  return location.protocol === "https:" ? `wss://${location.host}` : `ws://${location.host}`;
 }
 
-async function startCamera() {
-  if (cameraMode) return;
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    showToast("Camera not available. Use http://localhost:8000", "error");
-    return;
-  }
-  setStatus("connecting", "Requesting camera…");
-  try {
-    cameraStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 960 }, height: { ideal: 540 } }, audio: false });
-  } catch (err) {
-    setStatus("idle", "System Idle");
-    if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
-      document.getElementById("cameraPermModal").style.display = "flex";
-    } else if (err.name === "NotFoundError") {
-      showToast("No camera found.", "error");
-    } else {
-      showToast("Camera error: " + err.message, "error");
-    }
-    return;
-  }
-
-  cameraMode = true;
-  resetAlerts();
-  _onSessionStart();
-  _requestGPSLocation();
-  btnCamera.classList.add("active");
-  placeholder.style.display = "none";
-  vidCorners.style.display  = "block";
-  liveBadge.style.display   = "flex";
-  recBadge.style.display    = "flex";
-  fpsBadge.style.display    = "block";
-  btnStop.disabled  = false;
-  btnStart.disabled = true;
-
-  cameraVideo = document.createElement("video");
-  cameraVideo.srcObject = cameraStream;
-  cameraVideo.autoplay = true; cameraVideo.playsInline = true; cameraVideo.muted = true;
-  captureCanvas = document.createElement("canvas");
-
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/ws/camera`);
-  setStatus("connecting", "Connecting…");
-
-  ws.onopen = () => {};
-  ws.onmessage = e => {
-    const msg = JSON.parse(e.data);
-    if (msg.type === "ready") {
-      setStatus("active", "Live Camera");
-      setStatusCard("active", "Analyzing");
-      cameraVideo.play().then(() => { captureTimer = setInterval(_sendFrame, 100); });
-    } else {
-      handleMessage(msg);
-    }
-  };
-  ws.onerror = () => { showToast("Backend error.", "error"); _stopCamera(); };
-  ws.onclose = () => _stopCamera();
+function openUpload() {
+  uploadModal.classList.remove("hidden");
 }
 
-function _sendFrame() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  if (!cameraVideo || cameraVideo.readyState < 2) return;
-  const w = cameraVideo.videoWidth || 960;
-  const h = cameraVideo.videoHeight || 540;
-  captureCanvas.width = w; captureCanvas.height = h;
-  captureCanvas.getContext("2d").drawImage(cameraVideo, 0, 0, w, h);
-  ws.send(JSON.stringify({ type: "frame", frame: captureCanvas.toDataURL("image/jpeg", 0.75).split(",")[1] }));
+function closeUpload() {
+  uploadModal.classList.add("hidden");
 }
 
-function _stopCamera() {
-  _onSessionStop();
-  clearInterval(captureTimer); captureTimer = null;
-  if (cameraStream) { cameraStream.getTracks().forEach(t => t.stop()); cameraStream = null; }
-  cameraVideo = null; cameraMode = false;
-  btnCamera.classList.remove("active");
-  liveBadge.style.display  = "none";
-  recBadge.style.display   = "none";
-  fpsBadge.style.display   = "none";
-  vidCorners.style.display = "none";
-  setStatus("idle", "System Idle");
-  setStatusCard("idle", "Standby");
-  btnStop.disabled  = true;
-  btnStart.disabled = !currentJobId;
-}
-
-function stopProcessing() {
-  if (cameraMode) {
-    if (ws) { ws.send(JSON.stringify({ type: "stop" })); ws.close(); ws = null; }
-    _stopCamera();
-    return;
-  }
-  _onSessionStop();
-  if (ws) { ws.close(); ws = null; }
-  setStatus("idle", "Stopped");
-  setStatusCard("idle", "Standby");
-  vidCorners.style.display = "none";
-  btnStart.disabled = !currentJobId;
-  btnStop.disabled  = true;
-}
-
-// ── WebSocket ──
-function startWebSocket(jobId) {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/ws/${jobId}`);
-  setStatus("connecting", "Connecting…");
-  btnStart.disabled = true;
-  btnStop.disabled  = false;
-
-  ws.onopen = () => {
-    setStatus("active", "Processing…");
-    setStatusCard("active", "Analyzing");
-    placeholder.style.display = "none";
-    vidCorners.style.display  = "block";
-    fpsBadge.style.display    = "block";
-  };
-  ws.onmessage = e => handleMessage(JSON.parse(e.data));
-  ws.onerror   = () => { showToast("Connection error. Is the server running?", "error"); setStatus("idle", "Error"); btnStart.disabled = false; btnStop.disabled = true; };
-  ws.onclose   = () => {
-    if (statusDot.classList.contains("active")) setStatus("idle", "Analysis Complete");
-    setStatusCard("idle", "Standby");
-    vidCorners.style.display = "none";
-    fpsBadge.style.display   = "none";
-    btnStart.disabled = false; btnStop.disabled = true;
-  };
-}
-
-// ── Message handler ──
-function handleMessage(msg) {
-  switch (msg.type) {
-    case "start":
-      setStatus("active", "Analyzing…");
-      break;
-
-    case "frame": {
-      const now = performance.now();
-      if (_frameReceiveTime > 0) {
-        const fps = Math.round(1000 / (now - _frameReceiveTime));
-        fpsBadge.textContent = Math.min(fps, 60) + " FPS";
-      }
-      _frameReceiveTime = now;
-
-      drawFrame(msg.frame);
-      updateStats(msg.stats);
-
-      if (msg.enhancement_mode && msg.enhancement_mode !== "Normal") {
-        enhancementBadge.textContent = msg.enhancement_mode.toUpperCase();
-        enhancementBadge.style.display = "block";
-        const label = document.getElementById("vidEnhLabel");
-        if (label) { label.textContent = msg.enhancement_mode; label.style.display = "block"; }
-      } else {
-        enhancementBadge.style.display = "none";
-        const label = document.getElementById("vidEnhLabel");
-        if (label) label.style.display = "none";
-      }
-
-      if (msg.timestamp !== undefined) timestampBadge.textContent = formatTime(msg.timestamp);
-      if (msg.progress  !== undefined && msg.progress >= 0) progressFill.style.width = msg.progress + "%";
-      break;
-    }
-
-    case "alert":
-      addIncidentCard(msg.incident);
-      triggerAlertEffects(msg.incident);
-      break;
-
-    case "complete":
-      setStatus("idle", "Analysis Complete");
-      setStatusCard("idle", "Standby");
-      progressFill.style.width = "100%";
-      if (msg.stats) updateStats(msg.stats);
-      clearBanner();
-      showToast(`Done — ${msg.total_alerts || 0} incident(s) detected`, msg.total_alerts > 0 ? "alert" : "success");
-      break;
-
-    case "error":
-      showToast("Server error: " + msg.message, "error");
-      setStatus("idle", "Error");
-      break;
-  }
-}
-
-// ── Canvas ──
-function drawFrame(b64) {
-  const img = new Image();
-  img.onload = () => { canvas.width = img.naturalWidth; canvas.height = img.naturalHeight; ctx.drawImage(img, 0, 0); };
-  img.src = "data:image/jpeg;base64," + b64;
-}
-
-// ── Stats ──
-function updateStats(stats) {
-  if (!stats) return;
-  vehicleCount = stats.total_vehicles ?? vehicleCount;
-  frameCount   = stats.frame_count   ?? frameCount;
-  statVehicles.textContent = vehicleCount;
-  statFrames.textContent   = frameCount;
-}
-
-// ── Alert effects ──
-function triggerAlertEffects(incident) {
-  const sev = incident.severity;
-
-  // Screen flash
-  screenFlash.className = "screen-flash " + sev;
-  setTimeout(() => { screenFlash.className = "screen-flash"; }, 800);
-
-  // Status dot pulse
-  statusDot.classList.remove("active");
-  statusDot.classList.add("alert");
-  setTimeout(() => { statusDot.classList.remove("alert"); statusDot.classList.add("active"); }, 2500);
-
-  // Video banner
-  const label = `${sev.toUpperCase()}  ·  ${(incident.collision_type || "COLLISION").toUpperCase()}  ·  ${incident.incident_id}`;
-  videoAlertBanner.textContent = label;
-  videoAlertBanner.className   = "vid-alert-banner " + sev;
-  clearTimeout(videoAlertBanner._t);
-  videoAlertBanner._t = setTimeout(clearBanner, 5000);
-
-  // Sound
-  playAlertSound(sev);
-
-  // Emergency modal for Critical/Major
-  if (sev === "Critical" || sev === "Major") showEmergencyModal(incident);
-}
-
-function clearBanner() {
-  videoAlertBanner.className = "vid-alert-banner";
-  videoAlertBanner.textContent = "";
-}
-
-// ── Emergency modal ──
-function showEmergencyModal(incident) {
-  const sev  = incident.severity;
-  const dlg  = document.getElementById("emergencyDialog");
-  dlg.className = sev === "Major" ? "emergency-dialog major" : "emergency-dialog";
-
-  document.getElementById("emergencyTitle").textContent =
-    sev === "Critical" ? "CRITICAL ACCIDENT DETECTED" : "MAJOR ACCIDENT DETECTED";
-  document.getElementById("emergencyId").textContent  = incident.incident_id;
-  document.getElementById("emergencyType").textContent = incident.collision_type || "Unknown collision type";
-
-  const fireUnit = document.getElementById("fireUnit");
-  if (sev === "Critical") {
-    fireUnit.classList.add("dispatched");
-    document.getElementById("fireStatus").textContent = "Dispatched";
-    document.getElementById("fireStatus").className = "du-status dispatched";
-    document.getElementById("fireEta").textContent = `ETA ${3 + Math.floor(Math.random()*2)} min`;
-  } else {
-    fireUnit.classList.remove("dispatched");
-    document.getElementById("fireStatus").textContent = "On Standby";
-    document.getElementById("fireStatus").className = "du-status";
-    document.getElementById("fireEta").textContent = "If required";
-  }
-
-  document.getElementById("ambEta").textContent = `ETA ${2 + Math.floor(Math.random()*3)} min`;
-  document.getElementById("polEta").textContent = `ETA ${1 + Math.floor(Math.random()*3)} min`;
-
-  const now = new Date();
-  ["logTime0","logTime1","logTime2","logTime3"].forEach((id, i) => {
-    document.getElementById(id).textContent = new Date(now.getTime() + i*3000).toLocaleTimeString();
-  });
-
-  const pct = Math.round(incident.score * 100);
-  const bar  = document.getElementById("emergencyScoreBar");
-  const barColor = sev === "Critical" ? "#ef4444" : "#f97316";
-  bar.style.background = barColor;
-  bar.style.width = "0%";
-  document.getElementById("emergencyScorePct").textContent = pct + "%";
-  setTimeout(() => { bar.style.width = pct + "%"; }, 80);
-
-  document.getElementById("emergencyModal").style.display = "flex";
-}
-
-function closeEmergency() {
-  document.getElementById("emergencyModal").style.display = "none";
-}
-
-// ── Filter tabs ──
-document.querySelectorAll(".ftab").forEach(tab => {
-  tab.addEventListener("click", () => {
-    document.querySelectorAll(".ftab").forEach(t => t.classList.remove("active"));
-    tab.classList.add("active");
-    activeFilter = tab.dataset.filter;
-    applyFilter();
-  });
-});
-
-function applyFilter() {
-  alertList.querySelectorAll(".incident-card").forEach(card => {
-    card.style.display = (activeFilter === "all" || card.classList.contains(activeFilter)) ? "" : "none";
-  });
-}
-
-// ── Incident cards ──
-function addIncidentCard(incident) {
-  incidentCount++;
-  allIncidents.unshift(incident);
-
-  statIncidents.textContent = incidentCount;
-  if (incident.severity === "Critical") { criticalCount++; statCritical.textContent = criticalCount; }
-  else if (incident.severity === "Major") { majorCount++;  statMajor.textContent   = majorCount; }
-  else { minorCount++; statMinor.textContent = minorCount; }
-
-  alertCountBadge.textContent    = incidentCount;
-  alertCountBadge.style.display  = "inline-block";
-  document.getElementById("btnDownload").style.display = "flex";
-  document.getElementById("btnClearLog").style.display  = "flex";
-
-  const empty = document.getElementById("alertEmpty");
-  if (empty) empty.remove();
-
-  const sev = incident.severity;
-  const scoreColor = sev === "Critical" ? "#ef4444" : sev === "Major" ? "#f97316" : "#eab308";
-  const scorePct   = Math.round(incident.score * 100);
-  const timeStr    = new Date(incident.timestamp * 1000).toLocaleTimeString();
-
-  const platesHtml = (incident.plates || []).length
-    ? incident.plates.map(p => `<span class="plate-chip">${p}</span>`).join("")
-    : `<span style="color:var(--text-3); font-size:0.7rem;">Not detected</span>`;
-
-  const card = document.createElement("div");
-  card.className = `incident-card ${sev}`;
-  if (activeFilter !== "all" && activeFilter !== sev) card.style.display = "none";
-
-  card.innerHTML = `
-    <div class="ic-header">
-      <span class="ic-id">${incident.incident_id}</span>
-      <span class="ic-badge ${sev}">${sev}</span>
-    </div>
-    <div class="ic-type">${(incident.collision_type || "Unknown Collision").replace(/-/g," ").replace(/_/g," ")}</div>
-    <div class="ic-row">
-      <span class="ic-key">Time</span>
-      <span class="ic-val">${timeStr} &nbsp;·&nbsp; Frame ${incident.frame_number.toLocaleString()}</span>
-    </div>
-    <div class="ic-row">
-      <span class="ic-key">Vehicles</span>
-      <span class="ic-val">${incident.track_ids.length ? "IDs: " + incident.track_ids.join(", ") : "Model detection"}</span>
-    </div>
-    <div class="ic-row">
-      <span class="ic-key">Plates</span>
-      <span class="ic-val">${platesHtml}</span>
-    </div>
-    <div class="ic-score-row">
-      <div class="ic-score-track">
-        <div class="ic-score-fill" style="width:${scorePct}%; background:${scoreColor};"></div>
-      </div>
-      <div class="ic-score-label">Impact score: ${scorePct}%</div>
-    </div>
-  `;
-
-  alertList.insertBefore(card, alertList.firstChild);
-  statLatency.textContent = "~0.5s";
-
-  // Drop pin on the Coimbatore map
-  addIncidentToMap(incident);
-
-  // New feature hooks
-  _onNewIncident(incident);
-}
-
-
-// ── Download report ──
-function downloadReport() {
-  if (!allIncidents.length) return;
-  const lines = [
-    "RESQ VISION — INCIDENT REPORT",
-    "Generated: " + new Date().toLocaleString(),
-    "=".repeat(54), "",
-    `Total: ${allIncidents.length}  |  Critical: ${criticalCount}  |  Major: ${majorCount}  |  Minor: ${minorCount}`,
-    "", "=".repeat(54), "",
-  ];
-  allIncidents.forEach((inc, i) => {
-    lines.push(`[${String(i+1).padStart(3,"0")}] ${inc.incident_id}  —  ${inc.severity}`);
-    lines.push(`  Type       : ${inc.collision_type || "N/A"}`);
-    lines.push(`  Time       : ${new Date(inc.timestamp*1000).toLocaleString()}`);
-    lines.push(`  Frame      : ${inc.frame_number}`);
-    lines.push(`  Score      : ${Math.round(inc.score*100)}%`);
-    lines.push(`  Track IDs  : ${inc.track_ids.join(", ") || "N/A"}`);
-    lines.push(`  Plates     : ${inc.plates.join(", ") || "Not detected"}`);
-    lines.push(`  Location   : (${inc.location.map(v=>Math.round(v)).join(", ")})`);
-    lines.push("");
-  });
-  const blob = new Blob([lines.join("\n")], { type: "text/plain" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `rescue_vision_report_${Date.now()}.txt`;
-  a.click();
-  URL.revokeObjectURL(a.href);
-  showToast("Report downloaded", "success");
-}
-
-// ── Reset ──
-function resetAlerts() {
-  _onReset();
-  incidentCount = criticalCount = majorCount = minorCount = 0;
-  frameCount = vehicleCount = 0;
-  allIncidents = []; activeFilter = "all"; _frameReceiveTime = 0;
-
-  statIncidents.textContent = statCritical.textContent = statMajor.textContent =
-  statMinor.textContent = statVehicles.textContent = statFrames.textContent = "0";
-  statLatency.textContent = "—";
-
-  alertCountBadge.style.display = "none";
-  document.getElementById("btnDownload").style.display = "none";
-  document.getElementById("btnClearLog").style.display  = "none";
-
-  document.querySelectorAll(".ftab").forEach(t => t.classList.remove("active"));
-  document.querySelector('.ftab[data-filter="all"]').classList.add("active");
-
-  alertList.innerHTML = `
-    <div class="incident-empty" id="alertEmpty">
-      <svg class="ie-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/>
-      </svg>
-      <div class="ie-title">No Incidents Detected</div>
-      <div class="ie-sub">The AI system is monitoring for accidents in real time</div>
-    </div>`;
-
-  progressFill.style.width = "0%";
-  clearBanner();
-
-  // Also reset the map incident pins silently
-  if (coimbatoreMap) {
-    incidentMarkers.forEach(m => coimbatoreMap.removeLayer(m));
-    incidentMarkers = [];
-    mapIncidentTotal = mapIncidentCritical = mapIncidentMajor = mapIncidentMinor = 0;
-    if (elMapTotal)      elMapTotal.textContent      = "0";
-    if (elMapCritical)   elMapCritical.textContent   = "0";
-    if (elMapMajor)      elMapMajor.textContent      = "0";
-    if (elMapMinor)      elMapMinor.textContent      = "0";
-    if (elMapLastUpdate) elMapLastUpdate.textContent = "—";
-  }
-}
-
-// ── UI helpers ──
-function setStatus(state, label) {
+function setStatus(stateName, label) {
   statusLabel.textContent = label;
   statusDot.className = "status-dot";
-  if (state === "active" || state === "connecting" || state === "ready") statusDot.classList.add("active");
-  if (state === "uploading") statusDot.classList.add("uploading");
+  if (stateName === "active" || stateName === "ready") statusDot.classList.add("active");
+  if (stateName === "uploading") statusDot.classList.add("uploading");
+  if (stateName === "alert") statusDot.classList.add("alert");
 }
 
-function setStatusCard(state, label) {
-  if (!statusCardDot || !statusCardValue) return;
-  statusCardValue.textContent = label;
-  statusCardDot.className = "sc-indicator" + (state === "active" ? " active" : "");
-}
-
-function formatTime(s) {
-  return String(Math.floor(s/60)).padStart(2,"0") + ":" + String(Math.floor(s%60)).padStart(2,"0");
+async function checkBackendHealth() {
+  try {
+    const res = await fetch(`${API}/api/health`);
+    const payload = await parseApiResponse(res);
+    if (!res.ok || payload.status !== "ok") {
+      throw new Error(payload.detail || payload.message || "Backend health check failed");
+    }
+    setStatus("ready", "Backend Ready");
+    liveTicker.textContent = "Backend connected. Upload a video or start live camera monitoring.";
+  } catch (error) {
+    setStatus("alert", "Backend Offline");
+    liveTicker.textContent = `Backend not reachable at ${API || LOCAL_API_BASE}. Start the FastAPI server first.`;
+    showToast(`Backend check failed: ${error.message}`, "error");
+  }
 }
 
 function showToast(message, type = "info") {
-  const t = document.createElement("div");
-  t.className = `toast ${type}`;
-  t.textContent = message;
-  document.getElementById("toastContainer").appendChild(t);
-  setTimeout(() => t.remove(), 4000);
+  const toast = document.createElement("div");
+  toast.className = `toast ${type}`;
+  toast.textContent = message;
+  toast.title = "Click to dismiss";
+  toast.addEventListener("click", () => toast.remove());
+  document.getElementById("toastContainer").appendChild(toast);
+  const timeout = type === "error" ? 15000 : type === "info" ? 9000 : 5000;
+  setTimeout(() => toast.remove(), timeout);
 }
 
-// ── Live Map — Coimbatore ──────────────────────────────────────────────────────
-
-// Coimbatore city center coordinates
-const CBE_CENTER = [11.0168, 76.9558];
-
-// Known accident black-spots in Coimbatore — verified coordinates
-const HOTSPOTS = [
-  { name: "Avanashi Road & TIDEL Park Junction", lat: 11.0317, lng: 77.0187, severity: "Critical", info: "High-speed mixed traffic corridor — NH-544" },
-  { name: "Ukkadam Bus Stand Junction",          lat: 10.9886, lng: 76.9617, severity: "Critical", info: "Heavy pedestrian-vehicle conflict zone" },
-  { name: "Gandhipuram Central Bus Terminus",    lat: 11.0175, lng: 76.9668, severity: "Major",    info: "Dense bus & auto-rickshaw traffic" },
-  { name: "Singanallur Signal",                  lat: 10.9990, lng: 77.0324, severity: "Major",    info: "Frequent rear-end collisions at signal" },
-  { name: "Peelamedu Flyover",                   lat: 11.0246, lng: 77.0072, severity: "Major",    info: "Two-wheeler accident hotspot near airport road" },
-  { name: "Saravanampatti Junction",             lat: 11.0764, lng: 77.0030, severity: "Minor",    info: "IT corridor evening peak-hour congestion" },
-  { name: "Hope College Junction",               lat: 11.0238, lng: 76.9732, severity: "Minor",    info: "School zone — morning pedestrian hazards" },
-  { name: "Race Course Road",                    lat: 11.0060, lng: 76.9582, severity: "Minor",    info: "Night-time speeding incidents" },
-  { name: "Trichy Road & Krishnaswamy Nagar",    lat: 10.9850, lng: 77.0020, severity: "Major",    info: "Lorry-car collision hotspot on Trichy Road" },
-  { name: "Coimbatore Junction (Railway)",       lat: 11.0023, lng: 76.9629, severity: "Minor",    info: "Auto & pedestrian congestion near station" },
-];
-
-// Coimbatore road area – bounding box for fallback random incident pins
-const CBE_BOUNDS = {
-  minLat: 10.985, maxLat: 11.080,
-  minLng: 76.955, maxLng: 77.035,
-};
-
-let coimbatoreMap  = null;
-let incidentMarkers = [];
-let mapIncidentTotal    = 0;
-let mapIncidentCritical = 0;
-let mapIncidentMajor    = 0;
-let mapIncidentMinor    = 0;
-
-// Map stats DOM elements (may not exist until DOMContentLoaded)
-let elMapTotal, elMapCritical, elMapMajor, elMapMinor, elMapLastUpdate;
-
-function _initMapStats() {
-  elMapTotal      = document.getElementById("mapStatTotal");
-  elMapCritical   = document.getElementById("mapStatCritical");
-  elMapMajor      = document.getElementById("mapStatMajor");
-  elMapMinor      = document.getElementById("mapStatMinor");
-  elMapLastUpdate = document.getElementById("mapLastUpdate");
+function formatTime(seconds) {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
-function _updateMapStats(sev) {
-  mapIncidentTotal++;
-  if (sev === "Critical") mapIncidentCritical++;
-  else if (sev === "Major") mapIncidentMajor++;
-  else mapIncidentMinor++;
+function formatClock(date = new Date()) {
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "numeric",
+    month: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(date);
+}
 
-  if (elMapTotal)     elMapTotal.textContent      = mapIncidentTotal;
-  if (elMapCritical)  elMapCritical.textContent   = mapIncidentCritical;
-  if (elMapMajor)     elMapMajor.textContent      = mapIncidentMajor;
-  if (elMapMinor)     elMapMinor.textContent      = mapIncidentMinor;
-  if (elMapLastUpdate) elMapLastUpdate.textContent = new Date().toLocaleTimeString();
+function cycleClock() {
+  clockBadge.textContent = formatClock();
+}
+
+function setupNavigation() {
+  document.querySelectorAll(".nav-link").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      switchPage(btn.dataset.page);
+      if (window.innerWidth <= 960) {
+        dashboardShell.classList.remove("sidebar-open");
+        navToggle?.setAttribute("aria-expanded", "false");
+      }
+    });
+  });
+}
+
+function switchPage(page) {
+  document.querySelectorAll(".nav-link").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.page === page);
+  });
+  document.querySelectorAll(".page").forEach((panel) => {
+    panel.classList.toggle("page-active", panel.dataset.page === page);
+  });
+  document.getElementById("pageTitle").textContent = PAGE_META[page].title;
+  document.getElementById("pageSubtitle").textContent = PAGE_META[page].subtitle;
+  if (page === "map" && state.map) {
+    setTimeout(() => state.map.invalidateSize(), 60);
+  }
+  if (page === "hospital") {
+    renderHospitalPortal();
+  }
+}
+
+function setupSidebarToggle() {
+  if (!dashboardShell) return;
+
+  if (!navToggle) return;
+
+  const syncToggleState = (expanded) => {
+    navToggle.setAttribute("aria-expanded", String(expanded));
+  };
+
+  const handleToggle = () => {
+    if (window.innerWidth <= 960) {
+      const willOpen = !dashboardShell.classList.contains("sidebar-open");
+      dashboardShell.classList.toggle("sidebar-open", willOpen);
+      syncToggleState(willOpen);
+      return;
+    }
+
+    const willCollapse = !dashboardShell.classList.contains("sidebar-collapsed");
+    dashboardShell.classList.toggle("sidebar-collapsed", willCollapse);
+    syncToggleState(!willCollapse);
+  };
+
+  navToggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    handleToggle();
+  });
+
+  document.addEventListener("click", (event) => {
+    if (window.innerWidth > 960) return;
+    if (!dashboardShell.classList.contains("sidebar-open")) return;
+    if (sidebar?.contains(event.target) || navToggle.contains(event.target)) return;
+    dashboardShell.classList.remove("sidebar-open");
+    syncToggleState(false);
+  });
+
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > 960) {
+      dashboardShell.classList.remove("sidebar-open");
+      syncToggleState(!dashboardShell.classList.contains("sidebar-collapsed"));
+      return;
+    }
+    dashboardShell.classList.remove("sidebar-collapsed");
+    syncToggleState(dashboardShell.classList.contains("sidebar-open"));
+  });
+}
+
+function setupFilters() {
+  document.querySelectorAll("[data-alert-filter]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.activeAlertFilter = btn.dataset.alertFilter;
+      document.querySelectorAll("[data-alert-filter]").forEach((node) => node.classList.toggle("active", node === btn));
+      renderDispatchList();
+    });
+  });
+
+  document.querySelectorAll("[data-history-filter]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.activeHistoryFilter = btn.dataset.historyFilter;
+      document.querySelectorAll("[data-history-filter]").forEach((node) => node.classList.toggle("active", node === btn));
+      renderHistoryTimeline();
+    });
+  });
+
+  document.querySelectorAll("[data-hosp-filter]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.activeHospFilter = btn.dataset.hospFilter;
+      document.querySelectorAll("[data-hosp-filter]").forEach((node) => node.classList.toggle("active", node === btn));
+      renderHospitalPortal();
+    });
+  });
+}
+
+function setupModals() {
+  uploadModal.addEventListener("click", (event) => {
+    if (event.target === uploadModal) closeUpload();
+  });
+  uploadBox.addEventListener("click", (event) => {
+    if (event.target === fileInput || event.target.closest(".primary-btn")) return;
+    fileInput.click();
+  });
+  btnBrowseFile.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    fileInput.click();
+  });
+  btnUpload.addEventListener("click", openUpload);
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files[0]) handleFile(fileInput.files[0]);
+  });
+}
+
+async function handleFile(file) {
+  if (state.uploadInProgress) return;
+  stopCameraSession();
+  closeUploadStream();
+  state.uploadInProgress = true;
+  state.uploadAlertTriggered = false;
+  state.sessionStartedAt = Date.now();
+  startSessionTimer();
+  closeUpload();
+  setStatus("uploading", "Uploading...");
+  btnUpload.disabled = true;
+  btnCamera.disabled = true;
+  btnStop.disabled = false;
+  progressFill.style.width = "10%";
+  showUploadPreview(file);
+  videoPanelTitle.textContent = file.name || "Uploaded Video";
+  videoPanelSubtitle.textContent = "Playing local preview while backend analysis runs";
+  timestampBadge.textContent = "Analyzing...";
+  liveTicker.textContent = "Video uploaded. Backend analysis is running.";
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    const res = await fetch(`${API}/api/upload`, { method: "POST", body: formData });
+    const payload = await parseApiResponse(res);
+    if (!res.ok) {
+      throw new Error(payload.detail || payload.message || `${res.status} ${res.statusText}`);
+    }
+    if (!payload.job_id) {
+      throw new Error("Upload job did not start correctly");
+    }
+    state.uploadJobId = payload.job_id;
+    connectUploadStream(payload.job_id, file.name);
+  } catch (error) {
+    const msg = error instanceof TypeError
+      ? `Could not reach backend at ${API || LOCAL_API_BASE}`
+      : error.message;
+    showToast(`Upload error: ${msg}`, "error");
+    setStatus("idle", "System Idle");
+    progressFill.style.width = "0%";
+  } finally {
+    fileInput.value = "";
+  }
+}
+
+function persistDashboardState() {
+  try {
+    const payload = {
+      incidents: state.incidents.map((incident) => ({
+        ...incident,
+        timestamp: incident.timestamp instanceof Date ? incident.timestamp.toISOString() : incident.timestamp,
+      })),
+      lastStats: state.lastStats || {},
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  } catch {}
+}
+
+function restoreDashboardState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const payload = JSON.parse(raw);
+    const incidents = Array.isArray(payload.incidents) ? payload.incidents : [];
+    state.incidents = incidents.map((incident) => ({
+      ...incident,
+      timestamp: incident.timestamp ? new Date(incident.timestamp) : new Date(),
+    }));
+    state.lastStats = payload.lastStats || {};
+  } catch {}
+}
+
+async function parseApiResponse(res) {
+  const raw = await res.text();
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new Error(raw.trim() || "Invalid server response");
+  }
+}
+
+function connectUploadStream(jobId, sourceName) {
+  closeUploadStream();
+  state.uploadWs = new WebSocket(`${resolveWsBase()}/ws/${jobId}`);
+
+  state.uploadWs.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    handleUploadStreamMessage(msg, sourceName);
+  };
+
+  state.uploadWs.onerror = () => {
+    if (!state.uploadAlertTriggered) {
+      showToast("Upload stream disconnected unexpectedly", "error");
+      setStatus("alert", "Upload Stream Error");
+    }
+    finishUploadSession();
+  };
+
+  state.uploadWs.onclose = () => {
+    if (state.uploadInProgress) {
+      finishUploadSession();
+    }
+  };
+}
+
+function handleUploadStreamMessage(msg, sourceName) {
+  if (msg.type === "start") {
+    state.uploadSourceFps = msg.fps || 25;
+    setStatus("active", "Analyzing Upload");
+    videoPanelTitle.textContent = sourceName || "Uploaded Video";
+    videoPanelSubtitle.textContent = "Realtime accident scan on uploaded footage";
+    return;
+  }
+
+  if (msg.type === "frame") {
+    if (msg.stats) updateFeedStats(msg.stats);
+    if (typeof msg.progress === "number" && msg.progress >= 0) progressFill.style.width = `${msg.progress}%`;
+    if (typeof msg.timestamp === "number") timestampBadge.textContent = formatTime(msg.timestamp);
+    return;
+  }
+
+  if (msg.type === "alert" && msg.incident) {
+    state.uploadAlertTriggered = true;
+    pauseUploadAtIncident(msg.incident);
+    ingestIncident(msg.incident, { source: sourceName || "Uploaded video", fromLive: false });
+    liveTicker.textContent = "Accident detected. Playback paused and emergency workflow triggered.";
+    return;
+  }
+
+  if (msg.type === "complete") {
+    progressFill.style.width = "100%";
+    setStatus("idle", state.uploadAlertTriggered ? "Accident Detected" : "No Accident Detected");
+    if (!state.uploadAlertTriggered) {
+      liveTicker.textContent = "Upload scan completed. No accident detected.";
+      showToast("No accident detected in the uploaded video", "success");
+    } else {
+      showToast("Accident detected in the uploaded video", "alert");
+    }
+    finishUploadSession({ keepPreview: state.uploadAlertTriggered });
+    return;
+  }
+
+  if (msg.type === "error") {
+    setStatus("alert", "Server Error");
+    showToast(`Server error: ${msg.message}`, "error");
+    finishUploadSession();
+  }
+}
+
+function applyAnalysisResult(payload, sourceName) {
+  state.cameraMode = false;
+  progressFill.style.width = "100%";
+  recBadge.style.display = "none";
+  fpsBadge.style.display = "none";
+  btnStop.disabled = true;
+  btnCamera.disabled = false;
+  hideUploadPreview();
+  videoPanelTitle.textContent = sourceName || payload.filename || "Uploaded Video";
+  videoPanelSubtitle.textContent = "Backend accident analysis result";
+  if (payload.preview_frame) {
+    drawFrame(payload.preview_frame);
+  }
+  placeholder.style.display = "none";
+  enhancementBadge.style.display = "none";
+  timestampBadge.textContent = "Complete";
+  if (payload.stats) updateFeedStats(payload.stats);
+  setStatus("idle", payload.accident_detected ? "Accident Detected" : "No Accident Detected");
+  liveTicker.textContent = payload.message || "Backend analysis completed.";
+
+  const alerts = Array.isArray(payload.alerts) ? payload.alerts : [];
+  if (alerts.length) {
+    alerts.forEach((alert, index) => ingestIncident(alert, { source: sourceName || "Uploaded video", order: index, fromLive: false }));
+  } else {
+    renderAll();
+  }
+  persistDashboardState();
+
+  if (!alerts.length) {
+    showToast("No accident detected in the uploaded video", "success");
+  } else {
+    showToast("Accident detected in the uploaded video", "alert");
+  }
+}
+
+async function startCamera() {
+  if (state.cameraMode) return;
+  if (state.uploadInProgress) {
+    finishUploadSession();
+  }
+  hideUploadPreview();
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showToast("Camera not available in this browser", "error");
+    return;
+  }
+
+  setStatus("uploading", "Requesting Camera...");
+  btnUpload.disabled = true;
+  btnCamera.disabled = true;
+  btnStop.disabled = false;
+  try {
+    state.cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 960 }, height: { ideal: 540 } },
+      audio: false,
+    });
+  } catch (error) {
+    setStatus("idle", "System Idle");
+    btnUpload.disabled = false;
+    btnCamera.disabled = false;
+    btnStop.disabled = true;
+    document.getElementById("cameraPermModal").classList.remove("hidden");
+    return;
+  }
+
+  state.cameraMode = true;
+  state.sessionStartedAt = Date.now();
+  startSessionTimer();
+  videoPanelTitle.textContent = "Live Camera Feed";
+  videoPanelSubtitle.textContent = "Realtime backend accident monitoring";
+  placeholder.style.display = "none";
+  recBadge.style.display = "inline-flex";
+  progressFill.style.width = "0%";
+
+  state.cameraVideo = document.createElement("video");
+  state.cameraVideo.srcObject = state.cameraStream;
+  state.cameraVideo.autoplay = true;
+  state.cameraVideo.playsInline = true;
+  state.cameraVideo.muted = true;
+  state.captureCanvas = document.createElement("canvas");
+
+  state.ws = new WebSocket(`${resolveWsBase()}/ws/camera`);
+  state.ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.type === "ready") {
+      setStatus("active", "Live Camera");
+      enhancementBadge.style.display = "none";
+      state.cameraVideo.play().then(() => {
+        state.captureTimer = setInterval(sendCameraFrame, 120);
+      });
+      return;
+    }
+    handleRealtimeMessage(msg, { source: "Live Camera", live: true });
+  };
+  state.ws.onerror = () => stopCameraSession();
+  state.ws.onclose = () => stopCameraSession();
+}
+
+function sendCameraFrame() {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  if (!state.cameraVideo || state.cameraVideo.readyState < 2) return;
+  const w = state.cameraVideo.videoWidth || 960;
+  const h = state.cameraVideo.videoHeight || 540;
+  state.captureCanvas.width = w;
+  state.captureCanvas.height = h;
+  state.captureCanvas.getContext("2d").drawImage(state.cameraVideo, 0, 0, w, h);
+  state.ws.send(JSON.stringify({
+    type: "frame",
+    frame: state.captureCanvas.toDataURL("image/jpeg", 0.72).split(",")[1],
+  }));
+}
+
+function stopCameraSession() {
+  clearInterval(state.captureTimer);
+  state.captureTimer = null;
+  if (state.cameraStream) {
+    state.cameraStream.getTracks().forEach((track) => track.stop());
+    state.cameraStream = null;
+  }
+  if (state.ws) {
+    try {
+      state.ws.close();
+    } catch {}
+    state.ws = null;
+  }
+  state.cameraMode = false;
+  recBadge.style.display = "none";
+  fpsBadge.style.display = "none";
+  enhancementBadge.style.display = "none";
+  btnUpload.disabled = false;
+  btnCamera.disabled = false;
+  btnStop.disabled = true;
+  setStatus("idle", "System Idle");
+}
+
+function stopProcessing() {
+  if (state.uploadInProgress) {
+    finishUploadSession();
+    progressFill.style.width = "0%";
+    setStatus("idle", "System Idle");
+    liveTicker.textContent = "Upload analysis view reset.";
+    showToast("Upload preview cleared", "info");
+  }
+  if (state.cameraMode && state.ws) {
+    try {
+      state.ws.send(JSON.stringify({ type: "stop" }));
+    } catch {}
+  }
+  stopCameraSession();
+}
+
+function handleRealtimeMessage(msg, meta = {}) {
+  if (msg.type === "info") {
+    showToast(msg.message, "info");
+    liveTicker.textContent = msg.message;
+    return;
+  }
+
+  if (msg.type === "frame") {
+    const now = performance.now();
+    if (state.frameReceiveTime > 0) {
+      const fps = Math.round(1000 / (now - state.frameReceiveTime));
+      fpsBadge.textContent = `${Math.min(fps, 60)} FPS`;
+    }
+    state.frameReceiveTime = now;
+    drawFrame(msg.frame);
+    placeholder.style.display = "none";
+    if (msg.stats) updateFeedStats(msg.stats);
+    if (typeof msg.progress === "number" && msg.progress >= 0) progressFill.style.width = `${msg.progress}%`;
+    if (typeof msg.timestamp === "number") timestampBadge.textContent = formatTime(msg.timestamp);
+    enhancementBadge.style.display = msg.enhancement_mode && msg.enhancement_mode !== "Normal" ? "block" : "none";
+    enhancementBadge.textContent = msg.enhancement_mode || "";
+    return;
+  }
+
+  if (msg.type === "alert" && msg.incident) {
+    ingestIncident(msg.incident, { source: meta.source || "Live feed", fromLive: true });
+    return;
+  }
+
+  if (msg.type === "complete") {
+    if (!state.cameraMode) setStatus("idle", "Analysis Complete");
+    if (msg.stats) updateFeedStats(msg.stats);
+    progressFill.style.width = "100%";
+    liveTicker.textContent = "Backend processing completed.";
+    if ((msg.total_alerts || 0) === 0) {
+      showToast("No accident detected", "success");
+    }
+    return;
+  }
+
+  if (msg.type === "error") {
+    setStatus("alert", "Server Error");
+    showToast(`Server error: ${msg.message}`, "error");
+  }
+}
+
+function drawFrame(b64) {
+  const img = new Image();
+  img.onload = () => {
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    ctx.drawImage(img, 0, 0);
+  };
+  img.src = `data:image/jpeg;base64,${b64}`;
+}
+
+function closeUploadStream() {
+  if (!state.uploadWs) return;
+  try {
+    state.uploadWs.close();
+  } catch {}
+  state.uploadWs = null;
+}
+
+function finishUploadSession(options = {}) {
+  const { keepPreview = false } = options;
+  state.uploadInProgress = false;
+  state.uploadJobId = null;
+  state.uploadSourceFps = 0;
+  btnUpload.disabled = false;
+  btnCamera.disabled = false;
+  btnStop.disabled = true;
+  closeUploadStream();
+  if (!keepPreview) {
+    hideUploadPreview();
+  }
+}
+
+function pauseUploadAtIncident(incident) {
+  if (!uploadPreview) return;
+  const fps = state.uploadSourceFps || 25;
+  const incidentTime = incident.frame_number ? Math.max(0, incident.frame_number / fps) : uploadPreview.currentTime;
+  try {
+    uploadPreview.currentTime = incidentTime;
+  } catch {}
+  uploadPreview.pause();
+}
+
+function showUploadPreview(file) {
+  if (!uploadPreview) return;
+  if (state.uploadPreviewUrl) {
+    URL.revokeObjectURL(state.uploadPreviewUrl);
+  }
+  state.uploadPreviewUrl = URL.createObjectURL(file);
+  uploadPreview.src = state.uploadPreviewUrl;
+  uploadPreview.classList.remove("hidden");
+  uploadPreview.currentTime = 0;
+  uploadPreview.playbackRate = 0.9;
+  uploadPreview.play().catch(() => {});
+  placeholder.style.display = "none";
+  enhancementBadge.style.display = "none";
+}
+
+function hideUploadPreview() {
+  if (!uploadPreview) return;
+  uploadPreview.pause();
+  uploadPreview.removeAttribute("src");
+  uploadPreview.load();
+  uploadPreview.classList.add("hidden");
+  if (state.uploadPreviewUrl) {
+    URL.revokeObjectURL(state.uploadPreviewUrl);
+    state.uploadPreviewUrl = null;
+  }
+}
+
+function updateFeedStats(stats) {
+  state.lastStats = { ...(state.lastStats || {}), ...stats };
+  statVehicles.textContent = state.lastStats.total_vehicles ?? 0;
+  statFrames.textContent = state.lastStats.frame_count ?? 0;
+  persistDashboardState();
+}
+
+function normalizeIncident(raw, meta = {}) {
+  const index = state.incidents.length;
+  const preset = LOCATION_PRESETS[index % LOCATION_PRESETS.length];
+  const severity = raw.severity || "Major";
+  const time = raw.timestamp ? new Date(raw.timestamp * 1000) : new Date();
+  const ref = raw.plates?.[0] || raw.incident_id || `INC-${String(index + 1).padStart(4, "0")}`;
+  const responseTime = severity === "Critical" ? 8 : severity === "Major" ? 14 : 21;
+  const agencies = [
+    { ...RESPONDERS.police, status: "Notified" },
+    { ...RESPONDERS.ambulance, status: "Notified" },
+    { ...RESPONDERS.hospital, status: severity === "Minor" ? "Pending" : "Notified" },
+  ];
+
+  return {
+    id: raw.incident_id || `INC-${String(index + 1).padStart(4, "0")}`,
+    severity,
+    type: raw.collision_type ? raw.collision_type.replace(/[_-]/g, " ") : "Vehicle collision",
+    score: Math.round((raw.score || 0.68) * 100),
+    timestamp: time,
+    locationLabel: meta.locationLabel || preset.label,
+    lat: meta.lat || preset.lat + (Math.random() - 0.5) * 0.05,
+    lng: meta.lng || preset.lng + (Math.random() - 0.5) * 0.05,
+    reference: ref,
+    source: meta.source || "Backend stream",
+    status: severity === "Minor" ? "Resolved" : "Responding",
+    agencies,
+    responseTime,
+    improvement: severity === "Critical" ? 58 : severity === "Major" ? 44 : 31,
+    autoEscalated: severity !== "Minor",
+    raw,
+  };
+}
+
+function ingestIncident(raw, meta = {}) {
+  const incident = normalizeIncident(raw, meta);
+  state.incidents.unshift(incident);
+  if (incident.severity === "Critical" || incident.severity === "Major") {
+    showEmergencyModal(incident);
+  }
+  triggerAlertEffects(incident);
+  liveTicker.textContent = `${incident.severity} incident detected on ${incident.locationLabel}. Dispatch initiated.`;
+  renderAll();
+  persistDashboardState();
+}
+
+function triggerAlertEffects(incident) {
+  if (!state.soundEnabled) return;
+  const flash = document.getElementById("screenFlash");
+  flash.className = `screen-flash ${incident.severity}`;
+  setTimeout(() => {
+    flash.className = "screen-flash";
+  }, 500);
+}
+
+function renderAll() {
+  renderSummaryStats();
+  renderDispatchList();
+  renderHistoryTimeline();
+  renderHospitalPortal();
+  renderMap();
+  renderHistoryChart();
+  persistDashboardState();
+}
+
+function renderHospitalPortal() {
+  if (!hospitalAlerts) return;
+  const filter = state.activeHospFilter;
+  let items = state.incidents;
+
+  if (filter !== "all") {
+    if (filter === "Active") items = items.filter(i => i.status === "Responding");
+    else if (filter === "Accepted") items = items.filter(i => i.status === "Accepted");
+    else if (filter === "Completed") items = items.filter(i => i.status === "Resolved");
+  }
+
+  if (!items.length) {
+    hospitalAlerts.innerHTML = `
+      <div class="panel placeholder-panel">
+        <h3>No alerts found</h3>
+        <p>Filtered list is currently empty.</p>
+      </div>
+    `;
+    return;
+  }
+
+  hospitalAlerts.innerHTML = items.map(incident => `
+    <div class="hospital-card ${state.selectedIncidentId === incident.id ? "active-selection" : ""}" 
+         onclick="selectIncident('${incident.id}')" 
+         data-severity="${incident.severity}">
+      <div class="card-top">
+        <span class="card-id">${incident.id}</span>
+        <span class="card-time">${incident.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+      </div>
+      <h3 class="card-title">${incident.locationLabel}</h3>
+      <p class="card-desc">${incident.type} detected. Monitoring active.</p>
+      <div class="card-footer">
+        <span class="badge ${incident.severity}">${incident.severity}</span>
+        <span class="card-confidence">${incident.score}% Conf.</span>
+      </div>
+    </div>
+  `).join("");
+}
+
+function selectIncident(id) {
+  state.selectedIncidentId = id;
+  const incident = state.incidents.find((inc) => inc.id === id);
+  if (!incident) return;
+
+  const panel = document.getElementById("incidentDetail");
+  if (panel) {
+    panel.classList.remove("hidden");
+    document.querySelector('.hospital-layout').classList.add('panel-open');
+  }
+
+  // Populate all detail fields
+  if (detailId) detailId.textContent = incident.id;
+  if (detailTitle) detailTitle.textContent = incident.type;
+  if (detailLoc) detailLoc.textContent = incident.locationLabel;
+  if (detailSeverity) {
+    detailSeverity.textContent = incident.severity;
+    detailSeverity.className = `badge ${incident.severity.toLowerCase()}`;
+  }
+  
+  const detailTimeEl = document.getElementById("detailTime");
+  if (detailTimeEl) detailTimeEl.textContent = incident.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  
+  const detailStatusEl = document.getElementById("detailStatus");
+  if (detailStatusEl) {
+    const hospitalAgency = incident.agencies.find(a => a.label === 'Hospital');
+    detailStatusEl.textContent = incident.status || (hospitalAgency ? hospitalAgency.status : 'Responding');
+    detailStatusEl.className = `status-text ${detailStatusEl.textContent.toLowerCase()}`;
+  }
+  
+  const detailConfidenceEl = document.getElementById("detailConfidence");
+  if (detailConfidenceEl) detailConfidenceEl.textContent = `${incident.score}%`;
+  
+  const detailDescEl = document.getElementById("detailDesc");
+  if (detailDescEl) detailDescEl.textContent = `${incident.type} (${incident.severity} severity) detected at ${incident.locationLabel}. Confidence: ${incident.score}%. ${incident.source}.`;
+
+  // Dynamic nearby hospitals based on incident severity/status
+  if (nearbyHospitalList) {
+    const hospitals = [
+      { name: "KMCH Speciality Hospital", dist: "1.2 km", status: incident.severity === "Critical" ? "Accepted" : "Pending" },
+      { name: "PSG Hospitals", dist: "2.8 km", status: "Pending" },
+      { name: "Ganga Trauma Care", dist: "3.5 km", status: incident.severity === "Major" ? "Accepted" : "Pending" },
+      { name: "Coimbatore Medical College", dist: "5.1 km", status: "Available" },
+    ];
+
+    nearbyHospitalList.innerHTML = hospitals.map(h => `
+      <div class="hosp-item ${h.status === "Accepted" ? "accepted" : ""}">
+        <div class="hosp-info">
+          <div class="hosp-name">${h.name}</div>
+          <div class="hosp-dist">${h.dist}</div>
+        </div>
+        <div class="hosp-status">
+          <span class="status-badge ${h.status.toLowerCase().replace(/ /g, '-')}">${h.status}</span>
+        </div>
+      </div>
+    `).join("");
+  }
+
+  renderHospitalPortal();
+}
+
+function closeIncidentDetail() {
+  state.selectedIncidentId = null;
+  const panel = document.getElementById("incidentDetail");
+  if (panel) panel.classList.add("hidden");
+  document.querySelector('.hospital-layout').classList.remove('panel-open');
+  renderHospitalPortal();
+}
+
+function updateAmbulanceStatus(incident) {
+  const progress = incident.status === "Resolved" ? 100 : (incident.status === "Accepted" ? 60 : 30);
+  ambProgress.style.width = `${progress}%`;
+  ambTime.textContent = incident.status === "Resolved" ? "Arrived" : "ETA 4 min";
+  ambStatus.textContent = incident.status === "Resolved" ? "Completed" : (incident.status === "Accepted" ? "En Route" : "Dispatched");
+  
+  const milestones = document.querySelectorAll(".milestone");
+  milestones.forEach((m, i) => {
+    if (progress > (i * 35)) m.classList.add("active");
+    else m.classList.remove("active");
+  });
+}
+
+function updateDetailTimeline(incident) {
+  const events = [
+    { title: "Accident Detected", desc: "Computer Vision Alert", time: "10:24 AM", active: true },
+    { title: "Alert Sent", desc: "Agencies Notified Automatically", time: "10:24 AM", active: true },
+    { title: "Hospital Accepted", desc: "Case Locked for KMCH", time: "10:25 AM", active: incident.status !== "Responding" },
+    { title: "Ambulance Dispatched", desc: "GPS Tracking Active", time: "10:26 AM", active: incident.status !== "Responding" },
+    { title: "Arrival at Location", desc: "Patient Stabilized", time: "--:--", active: incident.status === "Resolved" }
+  ];
+
+  incidentTimeline.innerHTML = events.map(e => `
+    <div class="pulse-item ${e.active ? "active" : ""}">
+      <div class="pulse-dot"></div>
+      <div class="pulse-content">
+        <b>${e.title}</b>
+        <span>${e.desc} • ${e.time}</span>
+      </div>
+    </div>
+  `).join("");
+}
+
+function renderSummaryStats() {
+  const total = state.incidents.length;
+  statIncidents.textContent = total;
+  const active = state.incidents.filter((i) => i.status === "Responding").length;
+  liveActiveAlerts.textContent = active;
+  const resolved = state.incidents.filter((i) => i.status === "Resolved").length;
+  liveResolved.textContent = resolved;
+  alertTotalCount.textContent = total;
+}
+
+function getFilteredIncidents(filter) {
+  if (filter === "all") return state.incidents;
+  return state.incidents.filter((incident) => incident.severity === filter);
+}
+
+function renderDispatchList() {
+  const items = getFilteredIncidents(state.activeAlertFilter);
+  if (!items.length) {
+    dispatchList.innerHTML = `<div class="dispatch-card"><div class="dispatch-title">No alerts yet</div><div class="dispatch-sub">Incoming incidents from upload and live camera will appear here.</div></div>`;
+    return;
+  }
+
+  dispatchList.innerHTML = items.map((incident) => `
+    <article class="dispatch-card">
+      <div class="dispatch-header">
+        <div>
+          <div class="dispatch-title-row">
+            <span class="badge ${incident.severity}">${incident.severity}</span>
+            <span class="dispatch-title">${incident.locationLabel}</span>
+            ${incident.autoEscalated ? `<span class="status-badge">Auto-Escalated</span>` : ""}
+          </div>
+          <div class="dispatch-sub">
+            Reference: <strong>${incident.reference}</strong> | ${incident.type} | ${incident.score}% confidence
+          </div>
+        </div>
+        <div class="mono">${incident.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
+      </div>
+      <div class="dispatch-agencies">
+        ${incident.agencies.map((agency) => `
+          <div class="agency-card ${agency.status === "Pending" ? "pending" : ""}">
+            <span>${agency.label}</span>
+            <strong>${agency.status}</strong>
+          </div>
+        `).join("")}
+      </div>
+    </article>
+  `).join("");
+}
+
+function renderHistoryTimeline() {
+  const items = getFilteredIncidents(state.activeHistoryFilter);
+  if (!items.length) {
+    historyTimeline.innerHTML = `<article class="timeline-card"><div class="timeline-title">No history yet</div><div class="timeline-sub">Completed incidents will appear in this timeline.</div></article>`;
+    return;
+  }
+
+  historyTimeline.innerHTML = items.map((incident) => `
+    <article class="timeline-card">
+      <div class="timeline-header">
+        <div>
+          <div class="timeline-title-row">
+            <span class="badge ${incident.severity}">${incident.severity}</span>
+            <span class="timeline-title">${incident.locationLabel}</span>
+          </div>
+          <div class="timeline-sub">${incident.type}. Agencies dispatched automatically through backend workflow.</div>
+        </div>
+        <div class="mono">${incident.timestamp.toLocaleDateString()} ${incident.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
+      </div>
+      <div class="timeline-metrics">
+        <div class="metric-chip"><span>Response Time</span><strong>${incident.responseTime}s</strong></div>
+        <div class="metric-chip"><span>Agencies</span><strong>${incident.agencies.filter((a) => a.status === "Notified").length} Notified</strong></div>
+        <div class="metric-chip"><span>Improvement</span><strong>+${incident.improvement}%</strong></div>
+      </div>
+    </article>
+  `).join("");
 }
 
 function initMap() {
-  if (!document.getElementById("coimbatoreMap")) return;
-
-  coimbatoreMap = L.map("coimbatoreMap", {
-    center: CBE_CENTER,
-    zoom: 13,
+  state.map = L.map("coimbatoreMap", {
+    center: [11.1, 78.2],
+    zoom: 7,
     zoomControl: true,
-    attributionControl: true,
   });
 
-  // Dark tile layer (CartoDB Dark Matter)
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" style="color:#00d4aa">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" style="color:#00d4aa">CARTO</a>',
-    subdomains: "abcd",
-    maxZoom: 19,
-  }).addTo(coimbatoreMap);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "&copy; OpenStreetMap contributors",
+  }).addTo(state.map);
 
-  // Plot known hotspots as blue pulsing circles
-  HOTSPOTS.forEach(h => {
-    const color = h.severity === "Critical" ? "#ef4444" : h.severity === "Major" ? "#f97316" : "#eab308";
-    const circle = L.circleMarker([h.lat, h.lng], {
-      radius: h.severity === "Critical" ? 10 : h.severity === "Major" ? 8 : 6,
-      fillColor: color,
-      color: color,
+  [
+    { label: "Police Station", lat: 12.94, lng: 77.59, color: "#4f89ff" },
+    { label: "Police Station", lat: 11.66, lng: 78.15, color: "#4f89ff" },
+    { label: "Hospital", lat: 11.01, lng: 76.95, color: "#33d06f" },
+  ].forEach((point) => {
+    const marker = L.circleMarker([point.lat, point.lng], {
+      radius: 8,
+      color: point.color,
+      fillColor: point.color,
+      fillOpacity: 0.85,
       weight: 2,
-      opacity: 0.8,
-      fillOpacity: 0.25,
-    }).addTo(coimbatoreMap);
-
-    circle.bindPopup(`
-      <div style="min-width:180px;">
-        <div style="font-weight:700;font-size:13px;color:${color};margin-bottom:4px;">📍 ${h.name}</div>
-        <div style="color:#6b88a8;font-size:11px;margin-bottom:6px;">${h.info}</div>
-        <div style="display:flex;align-items:center;gap:6px;">
-          <span style="width:8px;height:8px;border-radius:50%;background:${color};display:inline-block;"></span>
-          <span style="font-size:11px;font-weight:600;color:${color};">${h.severity} Hotspot</span>
-        </div>
-      </div>
-    `);
+    });
+    marker.bindPopup(point.label);
+    marker.addTo(state.map);
   });
-
-  // Add a labeled city boundary circle
-  L.circle(CBE_CENTER, {
-    radius: 8000,
-    color: "rgba(0,212,170,0.3)",
-    fillColor: "rgba(0,212,170,0.03)",
-    fillOpacity: 1,
-    weight: 1,
-    dashArray: "6 4",
-  }).addTo(coimbatoreMap);
-
-  // City center marker
-  const cityIcon = L.divIcon({
-    html: `<div style="width:14px;height:14px;border-radius:50%;background:rgba(0,212,170,0.9);border:2px solid #fff;box-shadow:0 0 12px rgba(0,212,170,0.8);"></div>`,
-    className: "",
-    iconSize: [14, 14],
-    iconAnchor: [7, 7],
-  });
-  L.marker(CBE_CENTER, { icon: cityIcon })
-    .addTo(coimbatoreMap)
-    .bindPopup("<b style='color:#00d4aa'>Coimbatore City Centre</b><br><span style='color:#6b88a8;font-size:11px;'>Rescue Vision Monitoring Zone</span>");
-
-  _initMapStats();
-  _initMapClickHandler();
 }
 
-/**
- * Called when an incident is detected.
- * Uses real GPS/manual camera location if set, otherwise falls back to CBE scatter.
- */
-function addIncidentToMap(incident) {
-  if (!coimbatoreMap) return;
+function renderMap() {
+  if (!state.map) return;
+  state.mapMarkers.forEach((marker) => state.map.removeLayer(marker));
+  state.mapMarkers = [];
 
-  let lat, lng;
-  if (_cameraLocation) {
-    // Real location: scatter within ~80m radius of camera position
-    const jitter = 0.0007; // ~80m
-    lat = _cameraLocation.lat + (Math.random() - 0.5) * jitter;
-    lng = _cameraLocation.lng + (Math.random() - 0.5) * jitter;
-  } else {
-    // Fallback: pixel-based scatter within CBE bounding box
-    const [px, py] = incident.location || [0.5, 0.5];
-    lat = CBE_BOUNDS.minLat + (py / 100) * (CBE_BOUNDS.maxLat - CBE_BOUNDS.minLat);
-    lng = CBE_BOUNDS.minLng + (px / 100) * (CBE_BOUNDS.maxLng - CBE_BOUNDS.minLng);
-  }
-
-  const sev   = incident.severity;
-  const color = sev === "Critical" ? "#ef4444" : sev === "Major" ? "#f97316" : "#eab308";
-  const pct   = Math.round(incident.score * 100);
-  const time  = new Date(incident.timestamp * 1000).toLocaleTimeString();
-
-  const icon = L.divIcon({
-    html: `<div class="incident-marker ${sev}">${sev === "Critical" ? "🔴" : sev === "Major" ? "🟠" : "🟡"}</div>`,
-    className: "",
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
-  });
-
-  const marker = L.marker([lat, lng], { icon })
-    .addTo(coimbatoreMap)
-    .bindPopup(`
-      <div style="min-width:190px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-          <span style="font-family:monospace;font-size:11px;color:#6b88a8;">${incident.incident_id}</span>
-          <span style="font-size:10px;font-weight:800;padding:2px 8px;border-radius:999px;background:${color}22;color:${color};border:1px solid ${color}44;">${sev}</span>
-        </div>
-        <div style="font-weight:700;font-size:13px;color:#dde8f5;margin-bottom:4px;text-transform:capitalize;">${(incident.collision_type || "Collision").replace(/-/g," ")} </div>
-        <div style="color:#6b88a8;font-size:11px;margin-bottom:2px;">⏱ ${time}</div>
-        <div style="color:#6b88a8;font-size:11px;margin-bottom:6px;">🎯 Impact Score: <span style="color:${color};font-weight:600;">${pct}%</span></div>
-        <div style="height:4px;background:#172a44;border-radius:2px;overflow:hidden;">
-          <div style="height:100%;width:${pct}%;background:${color};border-radius:2px;"></div>
-        </div>
+  const items = state.incidents.slice(0, 12);
+  items.forEach((incident) => {
+    const marker = L.circleMarker([incident.lat, incident.lng], {
+      radius: 11,
+      color: severityColor(incident.severity),
+      fillColor: severityColor(incident.severity),
+      fillOpacity: 0.9,
+      weight: 3,
+    });
+    marker.bindPopup(`
+      <div>
+        <strong>${incident.locationLabel}</strong><br/>
+        ${incident.severity} | ${incident.type}<br/>
+        ${incident.reference}
       </div>
     `);
-
-  marker.openPopup();
-  incidentMarkers.push(marker);
-  _updateMapStats(sev);
-
-  // Pan map to the incident with a short delay
-  setTimeout(() => coimbatoreMap.panTo([lat, lng], { animate: true, duration: 0.6 }), 200);
+    marker.addTo(state.map);
+    state.mapMarkers.push(marker);
+  });
 }
 
 function centerMap() {
-  if (coimbatoreMap) coimbatoreMap.flyTo(CBE_CENTER, 13, { animate: true, duration: 1 });
+  if (!state.map) return;
+  if (!state.incidents.length) {
+    state.map.setView([11.1, 78.2], 7);
+    return;
+  }
+  const group = L.featureGroup(state.mapMarkers);
+  state.map.fitBounds(group.getBounds().pad(0.35));
 }
 
 function clearMapIncidents() {
-  incidentMarkers.forEach(m => coimbatoreMap.removeLayer(m));
-  incidentMarkers = [];
-  mapIncidentTotal = mapIncidentCritical = mapIncidentMajor = mapIncidentMinor = 0;
-  if (elMapTotal)      elMapTotal.textContent      = "0";
-  if (elMapCritical)   elMapCritical.textContent   = "0";
-  if (elMapMajor)      elMapMajor.textContent      = "0";
-  if (elMapMinor)      elMapMinor.textContent      = "0";
-  if (elMapLastUpdate) elMapLastUpdate.textContent = "—";
-  showToast("Map incident pins cleared", "info");
+  state.mapMarkers.forEach((marker) => state.map.removeLayer(marker));
+  state.mapMarkers = [];
+  showToast("Map pins cleared", "info");
 }
 
-// ── Camera Location (GPS / Manual) ────────────────────────────
-let _cameraLocation   = null;   // { lat, lng, accuracy, source }
-let _setLocationMode  = false;
-let _cameraMarker     = null;
-let _accuracyCircle   = null;
+function severityColor(severity) {
+  if (severity === "Critical") return "#ff504d";
+  if (severity === "Major") return "#f5ad1d";
+  return "#4f89ff";
+}
 
-/**
- * Called when Live Camera starts — requests real GPS from browser.
- */
-function _requestGPSLocation() {
-  if (!navigator.geolocation) {
-    showToast("GPS not available on this device", "info");
+function renderHistoryChart() {
+  const canvasEl = document.getElementById("historyChart");
+  if (!window.Chart || !canvasEl) return;
+
+  const dayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const counts = [0, 0, 0, 0, 0, 0, 0];
+  state.incidents.forEach((incident) => {
+    const day = (incident.timestamp.getDay() + 6) % 7;
+    counts[day] += 1;
+  });
+
+  if (state.historyChart) {
+    state.historyChart.data.labels = dayLabels;
+    state.historyChart.data.datasets[0].data = counts;
+    state.historyChart.update();
     return;
   }
-  showToast("Requesting GPS location…", "info");
-  navigator.geolocation.getCurrentPosition(
-    pos => {
-      _setCameraLocation(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy, "GPS");
-    },
-    err => {
-      let msg = "GPS unavailable";
-      if (err.code === 1) msg = "GPS permission denied — click 'Set Location' on the map";
-      else if (err.code === 2) msg = "GPS position unavailable — click 'Set Location' on the map";
-      showToast(msg, "info");
-    },
-    { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
-  );
-}
 
-/**
- * Called after video upload — prompts user to click map to set location.
- */
-function _promptCameraLocation() {
-  // Scroll to map smoothly
-  document.querySelector(".map-section").scrollIntoView({ behavior: "smooth", block: "start" });
-  setTimeout(() => enterSetLocationMode(), 600);
-}
-
-/**
- * Enter "click map to set location" mode.
- */
-function enterSetLocationMode() {
-  _setLocationMode = true;
-  const banner  = document.getElementById("locBanner");
-  const overlay = document.getElementById("mapSetLocOverlay");
-  const wrap    = document.getElementById("mapContainerWrap");
-  const btn     = document.getElementById("btnSetLocation");
-  if (banner)  banner.style.display  = "flex";
-  if (overlay) overlay.style.display = "flex";
-  if (wrap)    wrap.classList.add("set-location-mode");
-  if (btn)     btn.classList.add("active");
-  document.getElementById("locInfoBar").style.display = "none";
-}
-
-/**
- * Exit set-location mode without saving.
- */
-function exitSetLocationMode() {
-  _setLocationMode = false;
-  const banner  = document.getElementById("locBanner");
-  const overlay = document.getElementById("mapSetLocOverlay");
-  const wrap    = document.getElementById("mapContainerWrap");
-  const btn     = document.getElementById("btnSetLocation");
-  if (banner)  banner.style.display  = "none";
-  if (overlay) overlay.style.display = "none";
-  if (wrap)    wrap.classList.remove("set-location-mode");
-  if (btn)     btn.classList.remove("active");
-}
-
-/**
- * Saves camera location and updates all UI.
- */
-function _setCameraLocation(lat, lng, accuracy, source) {
-  _cameraLocation = { lat, lng, accuracy, source };
-  exitSetLocationMode();
-
-  // Update info bar
-  const infoBar  = document.getElementById("locInfoBar");
-  const srcLabel = document.getElementById("locSourceLabel");
-  const coords   = document.getElementById("locCoordsLabel");
-  const acc      = document.getElementById("locAccLabel");
-  if (infoBar)  infoBar.style.display  = "flex";
-  if (srcLabel) srcLabel.textContent   = source;
-  if (coords)   coords.textContent     = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-  if (acc && accuracy) acc.textContent = `± ${Math.round(accuracy)}m`;
-
-  // Update map subtitle
-  const sub = document.getElementById("mapSubLabel");
-  if (sub) sub.textContent = `Camera location locked · ${source} · ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-
-  // Place/update camera marker on map
-  if (coimbatoreMap) {
-    if (_cameraMarker)  coimbatoreMap.removeLayer(_cameraMarker);
-    if (_accuracyCircle) coimbatoreMap.removeLayer(_accuracyCircle);
-
-    // Accuracy circle (only for GPS)
-    if (accuracy && source === "GPS") {
-      _accuracyCircle = L.circle([lat, lng], {
-        radius: accuracy,
-        color: "rgba(16,185,129,0.6)",
-        fillColor: "rgba(16,185,129,0.08)",
-        fillOpacity: 1,
-        weight: 1.5,
-        dashArray: "4 4",
-      }).addTo(coimbatoreMap);
-    }
-
-    // Camera icon marker
-    const camIcon = L.divIcon({
-      html: `<div class="camera-loc-marker">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z"/>
-        </svg>
-      </div>`,
-      className: "",
-      iconSize: [36, 36],
-      iconAnchor: [18, 18],
-    });
-
-    _cameraMarker = L.marker([lat, lng], { icon: camIcon })
-      .addTo(coimbatoreMap)
-      .bindPopup(`
-        <div style="min-width:180px;">
-          <div style="font-weight:800;font-size:12px;color:#10b981;margin-bottom:4px;">CAMERA LOCATION</div>
-          <div style="font-size:11px;color:#6b88a8;margin-bottom:2px;">Source: <span style="color:#e8f0fe;font-weight:600;">${source}</span></div>
-          <div style="font-size:11px;color:#6b88a8;margin-bottom:2px;">Lat: <span style="color:#e8f0fe;font-family:monospace;">${lat.toFixed(6)}</span></div>
-          <div style="font-size:11px;color:#6b88a8;margin-bottom:2px;">Lng: <span style="color:#e8f0fe;font-family:monospace;">${lng.toFixed(6)}</span></div>
-          ${accuracy ? `<div style="font-size:11px;color:#6b88a8;">Accuracy: <span style="color:#10b981;font-weight:600;">±${Math.round(accuracy)}m</span></div>` : ""}
-          <div style="margin-top:8px;font-size:10px;color:#3a5070;">Accident pins will appear around this location</div>
-        </div>
-      `);
-
-    // Fly to camera location
-    coimbatoreMap.flyTo([lat, lng], 16, { animate: true, duration: 1.2 });
-  }
-
-  const srcMsg = source === "GPS" ? `GPS locked — accuracy ±${Math.round(accuracy || 0)}m` : "Camera location set on map";
-  showToast(srcMsg, "success");
-}
-
-// Add map click handler inside initMap
-function _initMapClickHandler() {
-  if (!coimbatoreMap) return;
-  coimbatoreMap.on("click", e => {
-    if (!_setLocationMode) return;
-    _setCameraLocation(e.latlng.lat, e.latlng.lng, null, "Manual");
-  });
-}
-
-// Initialise map on DOM ready
-document.addEventListener("DOMContentLoaded", initMap);
-
-// ═══════════════════════════════════════════════════════════════
-// NEW FEATURES: Session Timer · Chart · Screenshot · Fullscreen
-// ═══════════════════════════════════════════════════════════════
-
-// ── Session Timer ──────────────────────────────────────────────
-let _sessionStart    = null;
-let _sessionInterval = null;
-let _screenshotCount = 0;
-let _peakVehicles    = 0;
-
-function _onSessionStart() {
-  _sessionStart = Date.now();
-  clearInterval(_sessionInterval);
-  _sessionInterval = setInterval(() => {
-    const secs = Math.floor((Date.now() - _sessionStart) / 1000);
-    const el = document.getElementById("sessionUptime");
-    if (el) el.textContent = formatTime(secs);
-    const anEl = document.getElementById("anRuntime");
-    if (anEl) anEl.textContent = formatTime(secs);
-    // Track peak vehicles
-    if (vehicleCount > _peakVehicles) {
-      _peakVehicles = vehicleCount;
-      const pk = document.getElementById("anPeakVehicles");
-      if (pk) pk.textContent = _peakVehicles;
-    }
-  }, 1000);
-  _startChartUpdates();
-}
-
-function _onSessionStop() {
-  clearInterval(_sessionInterval);
-  _stopChartUpdates();
-}
-
-function _onReset() {
-  _collisionCounts  = {};
-  _cameraLocation   = null;
-  // Remove camera marker from map
-  if (_cameraMarker && coimbatoreMap)  { coimbatoreMap.removeLayer(_cameraMarker);  _cameraMarker = null; }
-  if (_accuracyCircle && coimbatoreMap){ coimbatoreMap.removeLayer(_accuracyCircle); _accuracyCircle = null; }
-  document.getElementById("locInfoBar").style.display  = "none";
-  document.getElementById("locBanner").style.display   = "none";
-  const sub = document.getElementById("mapSubLabel");
-  if (sub) sub.textContent = "Real-time accident hotspot monitoring across the city";
-  _peakVehicles    = 0;
-  _screenshotCount = 0;
-  const el = document.getElementById("topCollision");
-  if (el) el.textContent = "—";
-  const sc = document.getElementById("screenshotCount");
-  if (sc) sc.textContent = "0";
-  const pk = document.getElementById("anPeakVehicles");
-  if (pk) pk.textContent = "0";
-  const ti = document.getElementById("anTotalInc");
-  if (ti) ti.textContent = "0";
-  _clearChartData();
-}
-
-// ── Collision type tracking ────────────────────────────────────
-let _collisionCounts = {};
-
-function _onNewIncident(incident) {
-  // Track most common collision type
-  const raw  = (incident.collision_type || "Unknown").replace(/-/g," ").replace(/_/g," ");
-  _collisionCounts[raw] = (_collisionCounts[raw] || 0) + 1;
-  let top = "—", topCount = 0;
-  for (const [t, c] of Object.entries(_collisionCounts)) {
-    if (c > topCount) { topCount = c; top = t; }
-  }
-  const el = document.getElementById("topCollision");
-  if (el) el.textContent = top.split(" ").slice(0, 4).join(" ");
-
-  // Update analytics total
-  const ti = document.getElementById("anTotalInc");
-  if (ti) ti.textContent = incidentCount;
-
-  // Auto-screenshot & store on incident
-  _autoScreenshot(incident);
-
-  // SMS simulation for Critical
-  if (incident.severity === "Critical") {
-    setTimeout(() => showToast("SMS dispatched to emergency contacts", "alert"), 1400);
-  }
-}
-
-// ── Screenshot ─────────────────────────────────────────────────
-function _autoScreenshot(incident) {
-  if (!canvas || !canvas.width) return;
-  try { incident._screenshot = canvas.toDataURL("image/jpeg", 0.85); } catch(_) {}
-}
-
-function captureScreenshot() {
-  if (!canvas || !canvas.width) { showToast("No active video frame to capture", "error"); return; }
-  try {
-    const a = document.createElement("a");
-    const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
-    a.href     = canvas.toDataURL("image/png");
-    a.download = `resq_capture_${ts}.png`;
-    a.click();
-    _screenshotCount++;
-    const sc = document.getElementById("screenshotCount");
-    if (sc) sc.textContent = _screenshotCount;
-    showToast("Frame saved as PNG", "success");
-  } catch(e) { showToast("Screenshot failed", "error"); }
-}
-
-// ── Fullscreen ─────────────────────────────────────────────────
-function toggleFullscreen() {
-  const container = document.getElementById("videoContainer");
-  if (!document.fullscreenElement) {
-    const fn = container.requestFullscreen || container.webkitRequestFullscreen || container.mozRequestFullScreen;
-    if (fn) fn.call(container).catch(() => showToast("Fullscreen not available", "error"));
-  } else {
-    const ex = document.exitFullscreen || document.webkitExitFullscreen;
-    if (ex) ex.call(document);
-  }
-}
-
-document.addEventListener("fullscreenchange", () => {
-  const btn = document.getElementById("btnFullscreen");
-  if (!btn) return;
-  const svg = btn.querySelector("svg");
-  if (document.fullscreenElement) {
-    btn.title = "Exit fullscreen";
-    svg.innerHTML = `<path stroke-linecap="round" stroke-linejoin="round" d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25"/>`;
-  } else {
-    btn.title = "Fullscreen";
-    svg.innerHTML = `<path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15"/>`;
-  }
-});
-
-// ── Activity Chart ─────────────────────────────────────────────
-let _activityChart  = null;
-const _chartLabels   = [];
-const _chartVehicles = [];
-const _chartIncidents = [];
-let _chartTimer = null;
-
-function initActivityChart() {
-  const el = document.getElementById("activityChart");
-  if (!el || !window.Chart) return;
-
-  _activityChart = new Chart(el.getContext("2d"), {
-    type: "line",
+  state.historyChart = new Chart(canvasEl.getContext("2d"), {
+    type: "bar",
     data: {
-      labels: _chartLabels,
-      datasets: [
-        {
-          label: "Vehicles Detected",
-          data: _chartVehicles,
-          borderColor: "#10b981",
-          backgroundColor: "rgba(16,185,129,0.08)",
-          fill: true, tension: 0.45,
-          pointRadius: 0, pointHoverRadius: 4, borderWidth: 2,
-        },
-        {
-          label: "Incidents",
-          data: _chartIncidents,
-          borderColor: "#f43f5e",
-          backgroundColor: "rgba(244,63,94,0.08)",
-          fill: true, tension: 0.45,
-          pointRadius: 3, pointHoverRadius: 5, borderWidth: 2,
-          yAxisID: "yRight",
-        }
-      ]
+      labels: dayLabels,
+      datasets: [{
+        label: "Incidents",
+        data: counts,
+        backgroundColor: "#e42929",
+        borderRadius: 12,
+      }],
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      animation: false,
-      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: false } },
       scales: {
         x: {
-          ticks: { color: "#3a5070", font: { size: 9, family: "JetBrains Mono" }, maxTicksLimit: 8, maxRotation: 0 },
-          grid: { color: "rgba(255,255,255,0.04)" },
-          border: { color: "rgba(255,255,255,0.05)" },
+          ticks: { color: "#97a1b3" },
+          grid: { display: false },
         },
         y: {
           beginAtZero: true,
-          ticks: { color: "#10b981", font: { size: 9 } },
-          grid: { color: "rgba(16,185,129,0.05)" },
-          border: { color: "rgba(255,255,255,0.05)" },
-          title: { display: true, text: "Vehicles", color: "#10b981", font: { size: 9 } },
+          ticks: { color: "#97a1b3", stepSize: 1 },
+          grid: { color: "rgba(255,255,255,0.08)" },
         },
-        yRight: {
-          position: "right", beginAtZero: true,
-          ticks: { color: "#f43f5e", font: { size: 9 }, stepSize: 1 },
-          grid: { drawOnChartArea: false },
-          border: { color: "rgba(255,255,255,0.05)" },
-          title: { display: true, text: "Incidents", color: "#f43f5e", font: { size: 9 } },
-        }
       },
-      plugins: {
-        legend: {
-          labels: { color: "#7c93b8", font: { size: 11, family: "Inter" }, padding: 20, usePointStyle: true }
-        },
-        tooltip: {
-          backgroundColor: "rgba(7,8,15,0.95)",
-          borderColor: "rgba(255,255,255,0.08)", borderWidth: 1,
-          titleColor: "#e8f0fe", bodyColor: "#7c93b8", padding: 10,
-        }
-      }
-    }
+    },
   });
 }
 
-function _startChartUpdates() {
-  clearInterval(_chartTimer);
-  _chartTimer = setInterval(() => {
-    if (!_activityChart) return;
-    const t = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    _chartLabels.push(t);
-    _chartVehicles.push(vehicleCount);
-    _chartIncidents.push(incidentCount);
-    if (_chartLabels.length > 60) { _chartLabels.shift(); _chartVehicles.shift(); _chartIncidents.shift(); }
-    _activityChart.update("none");
-  }, 3000);
+function showEmergencyModal(incident) {
+  const modal = document.getElementById("emergencyModal");
+  modal.classList.remove("hidden");
+  document.getElementById("emergencyTitle").textContent = `${incident.severity} accident detected`;
+  document.getElementById("emergencyId").textContent = incident.id;
+  document.getElementById("emergencyType").textContent = incident.type;
+  document.getElementById("ambEta").textContent = `ETA ${Math.max(2, Math.round(incident.responseTime / 3))} min`;
+  document.getElementById("polEta").textContent = `ETA ${Math.max(1, Math.round(incident.responseTime / 4))} min`;
+  document.getElementById("fireEta").textContent = incident.severity === "Critical" ? "ETA 4 min" : "Standby";
+  document.getElementById("emergencyScorePct").textContent = `${incident.score}%`;
+  document.getElementById("emergencyScoreBar").style.width = `${incident.score}%`;
 }
 
-function _stopChartUpdates() {
-  clearInterval(_chartTimer);
-  _chartTimer = null;
+function closeEmergency() {
+  document.getElementById("emergencyModal").classList.add("hidden");
 }
 
-function _clearChartData() {
-  _chartLabels.length = 0;
-  _chartVehicles.length = 0;
-  _chartIncidents.length = 0;
-  if (_activityChart) _activityChart.update();
+function captureScreenshot() {
+  if (!canvas.width) {
+    showToast("No active frame to capture", "error");
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = canvas.toDataURL("image/png");
+  link.download = `resq_snapshot_${Date.now()}.png`;
+  link.click();
+  showToast("Screenshot saved", "success");
 }
 
-function clearChart() {
-  _clearChartData();
-  showToast("Chart cleared", "info");
+function toggleFullscreen() {
+  const container = document.getElementById("videoContainer");
+  if (!document.fullscreenElement) {
+    container.requestFullscreen?.();
+  } else {
+    document.exitFullscreen?.();
+  }
 }
 
-document.addEventListener("DOMContentLoaded", initActivityChart);
+function setupUtilityEvents() {
+  btnStop.addEventListener("click", stopProcessing);
+  btnCamera.addEventListener("click", startCamera);
+  soundBtn.addEventListener("click", () => {
+    state.soundEnabled = !state.soundEnabled;
+    showToast(state.soundEnabled ? "Sound alerts enabled" : "Sound alerts muted", "info");
+  });
+}
+
+function startSessionTimer() {
+  if (state.sessionTimer) clearInterval(state.sessionTimer);
+  if (!state.sessionStartedAt) state.sessionStartedAt = Date.now();
+  state.sessionTimer = setInterval(() => {
+    const seconds = (Date.now() - state.sessionStartedAt) / 1000;
+    clockBadge.title = `Session uptime ${formatTime(seconds)}`;
+  }, 1000);
+}
+
+function setupHospitalPanelEvents() {
+  const hospitalLayout = document.querySelector('.hospital-layout');
+  const incidentDetail = document.getElementById('incidentDetail');
+  
+  if (!hospitalLayout || !incidentDetail) return;
+
+  // Click outside to close
+  hospitalLayout.addEventListener('click', (e) => {
+    if (e.target === hospitalLayout && !incidentDetail.classList.contains('hidden')) {
+      closeIncidentDetail();
+    }
+  });
+
+  // Prevent panel content clicks from closing
+  incidentDetail.addEventListener('click', (e) => {
+    e.stopPropagation();
+  });
+}
+
+function bootstrap() {
+  restoreDashboardState();
+  setupNavigation();
+  setupSidebarToggle();
+  setupFilters();
+  setupModals();
+  setupUtilityEvents();
+  setupHospitalPanelEvents();
+  initMap();
+  renderAll();
+  switchPage("live");
+  cycleClock();
+  state.clockTimer = setInterval(cycleClock, 1000);
+  startSessionTimer();
+  setStatus("idle", "Checking Backend...");
+  recBadge.style.display = "none";
+  fpsBadge.style.display = "none";
+  checkBackendHealth();
+}
+
+document.addEventListener("DOMContentLoaded", bootstrap);
+
+window.openUpload = openUpload;
+window.startCamera = startCamera;
+window.closeEmergency = closeEmergency;
+window.captureScreenshot = captureScreenshot;
+window.toggleFullscreen = toggleFullscreen;
+window.centerMap = centerMap;
+window.clearMapIncidents = clearMapIncidents;
+window.closeIncidentDetail = closeIncidentDetail;
+window.selectIncident = selectIncident;

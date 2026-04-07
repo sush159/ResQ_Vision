@@ -29,3 +29,5 @@ names:
   7: car-object_collision
   8: car-person_collision
   9: person
+I’m reworking the upload flow itself, because the current design can never give you a true “instant popup at the accident second” experience. Right now uploads wait for a final result; I’m switching them to streamed processing so the uploaded video plays immediately, the backend analyzes in parallel, and the moment an accident frame is detected the video pauses and the big alert appears.
+

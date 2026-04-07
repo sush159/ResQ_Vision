@@ -1,550 +1,380 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ResQ Vision — AI Command Center</title>
-  <meta name="description" content="ResQ Vision: AI-Powered Smart Accident Detection & Autonomous Emergency Response System" />
+  <title>ResQ Vision - Emergency Command Center</title>
+  <meta name="description" content="ResQ Vision emergency monitoring dashboard" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/css/style.css" />
-  <!-- Leaflet CSS -->
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap"
+    rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
+
 <body>
+  <div id="screenFlash" class="screen-flash"></div>
+  <button id="navToggle" class="nav-toggle brand-toggle floating-brand-toggle" type="button"
+    aria-label="Toggle navigation" aria-expanded="true">
+    <span></span>
+    <span></span>
+    <span></span>
+  </button>
 
-<!-- Screen flash -->
-<div id="screenFlash" class="screen-flash"></div>
+  <div id="uploadModal" class="modal-shell hidden">
+    <div class="upload-modal" id="uploadBox">
+      <div class="modal-icon">Upload</div>
+      <h2>Upload surveillance footage</h2>
+      <p>Send one video to the backend and get a direct accident / no accident result.</p>
+      <button class="primary-btn" id="btnBrowseFile" type="button">Choose Video</button>
+      <input type="file" id="fileInput" accept=".mp4,.avi,.mov,.mkv,.webm" />
+      <div class="modal-note">Accepted: MP4, AVI, MOV, MKV, WEBM</div>
+    </div>
+  </div>
 
-<!-- ══════════════════════════════════
-     EMERGENCY DISPATCH MODAL
-════════════════════════════════════ -->
-<div id="emergencyModal" class="modal-overlay" style="display:none">
-  <div class="emergency-dialog" id="emergencyDialog">
-    <div class="ed-header">
-      <div class="ed-siren-wrap">
-        <div class="ed-siren-ring"></div>
-        <div class="ed-siren-ring ed-siren-ring2"></div>
-        <svg class="ed-siren-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
-        </svg>
+  <div id="cameraPermModal" class="modal-shell hidden">
+    <div class="upload-modal compact-modal">
+      <div class="modal-icon danger">Camera</div>
+      <h2>Camera access required</h2>
+      <p>Allow browser camera permissions and reload this page to use live monitoring.</p>
+      <button class="primary-btn" type="button" onclick="location.reload()">Reload</button>
+    </div>
+  </div>
+
+  <div id="emergencyModal" class="modal-shell hidden">
+    <div class="dispatch-modal" id="emergencyDialog">
+      <div class="dispatch-head">
+        <div>
+          <div class="dispatch-kicker">Emergency Dispatch</div>
+          <h3 id="emergencyTitle">Critical accident detected</h3>
+        </div>
+        <button class="ghost-btn" type="button" onclick="closeEmergency()">Close</button>
       </div>
-      <div class="ed-title-block">
-        <div class="ed-title" id="emergencyTitle">CRITICAL ACCIDENT DETECTED</div>
-        <div class="ed-meta">
-          <span class="ed-id" id="emergencyId">INC-0001</span>
-          <span class="ed-dot">·</span>
-          <span class="ed-type" id="emergencyType">Car vs Person Collision</span>
+      <div class="dispatch-meta">
+        <span id="emergencyId">INC-0001</span>
+        <span id="emergencyType">Collision</span>
+      </div>
+      <div class="dispatch-grid">
+        <div class="dispatch-unit">
+          <span>Ambulance</span>
+          <strong id="ambEta">ETA 3 min</strong>
+        </div>
+        <div class="dispatch-unit">
+          <span>Police</span>
+          <strong id="polEta">ETA 2 min</strong>
+        </div>
+        <div class="dispatch-unit" id="fireUnit">
+          <span>Fire Unit</span>
+          <strong id="fireEta">Standby</strong>
         </div>
       </div>
-      <button class="ed-close" onclick="closeEmergency()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-      </button>
-    </div>
-
-    <div class="ed-dispatch-grid">
-      <div class="dispatch-unit dispatched">
-        <div class="du-icon">🚑</div>
-        <div class="du-name">Ambulance</div>
-        <div class="du-status dispatched">Dispatched</div>
-        <div class="du-eta" id="ambEta">ETA 3 min</div>
+      <div class="impact-bar">
+        <span>Impact severity</span>
+        <div class="impact-track">
+          <div id="emergencyScoreBar"></div>
+        </div>
+        <span id="emergencyScorePct">0%</span>
       </div>
-      <div class="dispatch-unit dispatched">
-        <div class="du-icon">🚓</div>
-        <div class="du-name">Police</div>
-        <div class="du-status dispatched">Dispatched</div>
-        <div class="du-eta" id="polEta">ETA 2 min</div>
-      </div>
-      <div class="dispatch-unit" id="fireUnit">
-        <div class="du-icon">🚒</div>
-        <div class="du-name">Fire Unit</div>
-        <div class="du-status" id="fireStatus">On Standby</div>
-        <div class="du-eta" id="fireEta">If required</div>
-      </div>
-    </div>
-
-    <div class="ed-log">
-      <div class="ed-log-title">Activity Log</div>
-      <div class="ed-log-entries" id="emergencyLog">
-        <div class="ed-log-entry"><span class="ed-log-time" id="logTime0"></span><span>Accident auto-detected by AI system</span></div>
-        <div class="ed-log-entry"><span class="ed-log-time" id="logTime1"></span><span>Emergency services notified</span></div>
-        <div class="ed-log-entry"><span class="ed-log-time" id="logTime2"></span><span>Traffic management system flagged</span></div>
-        <div class="ed-log-entry"><span class="ed-log-time" id="logTime3"></span><span>Incident report auto-generated</span></div>
-      </div>
-    </div>
-
-    <div class="ed-score-row">
-      <span class="ed-score-label">Impact Severity</span>
-      <div class="ed-score-track">
-        <div class="ed-score-fill" id="emergencyScoreBar"></div>
-      </div>
-      <span class="ed-score-pct" id="emergencyScorePct">—</span>
-    </div>
-
-    <button class="ed-ack-btn" onclick="closeEmergency()">Acknowledge &amp; Dismiss</button>
-  </div>
-</div>
-
-<!-- ══════════════════════════════════
-     UPLOAD MODAL
-════════════════════════════════════ -->
-<div id="uploadModal" class="modal-overlay" style="display:none">
-  <div class="upload-dialog" id="uploadBox">
-    <div class="ud-icon-wrap">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
-      </svg>
-    </div>
-    <div class="ud-title">Upload Surveillance Footage</div>
-    <div class="ud-sub">Drag &amp; drop a video file here, or click to browse</div>
-    <div class="ud-formats">MP4 &nbsp;·&nbsp; AVI &nbsp;·&nbsp; MOV &nbsp;·&nbsp; MKV &nbsp;·&nbsp; WEBM &nbsp;·&nbsp; Max 500 MB</div>
-    <button class="ud-browse-btn" onclick="document.getElementById('fileInput').click()">Browse Files</button>
-    <input type="file" id="fileInput" accept=".mp4,.avi,.mov,.mkv,.webm" />
-  </div>
-</div>
-
-<!-- ══════════════════════════════════
-     CAMERA PERMISSION MODAL
-════════════════════════════════════ -->
-<div class="modal-overlay" id="cameraPermModal" style="display:none">
-  <div class="upload-dialog" style="cursor:default; max-width:470px;">
-    <div class="ud-icon-wrap" style="color:#f43f5e; background:rgba(244,63,94,0.1); border-color:rgba(244,63,94,0.3);">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
-      </svg>
-    </div>
-    <div class="ud-title" style="color:#f43f5e;">Camera Access Required</div>
-    <div class="ud-sub" style="text-align:left; line-height:1.9;">
-      <strong>Chrome / Edge:</strong> Click the lock icon → Camera → Allow → Reload<br/>
-      <strong>Firefox:</strong> Click camera icon in address bar → Remove block → Reload<br/>
-      <strong>Windows blocked?</strong> Settings → Privacy → Camera → Allow apps
-    </div>
-    <div style="display:flex; gap:10px; justify-content:center; margin-top:10px;">
-      <button class="ud-browse-btn" onclick="location.reload()">Reload Page</button>
-      <button class="ud-browse-btn" style="background:rgba(255,255,255,0.07); color:#7c93b8; box-shadow:none;" onclick="document.getElementById('cameraPermModal').style.display='none'">Dismiss</button>
     </div>
   </div>
-</div>
 
-<!-- Toast -->
-<div id="toastContainer"></div>
+  <div id="toastContainer" class="toast-stack"></div>
 
-<!-- ══════════════════════════════════
-     APP SHELL
-════════════════════════════════════ -->
-<div class="app">
-
-  <!-- ── Navbar ── -->
-  <header class="navbar">
-    <div class="nav-brand">
-      <div class="brand-mark">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/>
-        </svg>
+  <div class="dashboard-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand-block">
+        <div>
+          <div class="brand-title">Rescue Vision</div>
+          <div class="brand-subtitle">Emergency Response AI</div>
+        </div>
       </div>
-      <div>
-        <div class="brand-name">ResQ Vision</div>
-        <div class="brand-sub">AI Accident Detection &amp; Emergency Response</div>
-      </div>
-    </div>
 
-    <div class="nav-center">
-      <div class="status-chip">
-        <div class="status-dot" id="statusDot"></div>
+      <div class="system-chip">
+        <span class="system-dot" id="statusDot"></span>
         <span id="statusLabel">System Idle</span>
       </div>
-    </div>
 
-    <div class="nav-right">
-      <div class="nav-badge fps-badge" id="fpsBadge" style="display:none;">-- FPS</div>
-      <div class="nav-badge live-badge" id="liveBadge" style="display:none;">
-        <span class="live-dot"></span>LIVE
-      </div>
-      <button id="soundBtn" class="nav-icon-btn" title="Toggle sound alerts">
-        <svg id="soundIconOn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-          <path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/>
-        </svg>
-        <svg id="soundIconOff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none;">
-          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-          <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
-        </svg>
-      </button>
-    </div>
-  </header>
-
-  <!-- ── Workspace ── -->
-  <div class="workspace">
-
-    <!-- ── Left Sidebar ── -->
-    <aside class="sidebar">
-
-      <section class="sb-section">
-        <div class="sb-label">System Status</div>
-        <div class="status-card" id="statusCard">
-          <div class="sc-indicator" id="statusCardDot"></div>
-          <div class="sc-body">
-            <div class="sc-title" id="statusCardValue">Standby</div>
-            <div class="sc-sub">Detection Engine</div>
-          </div>
-        </div>
-      </section>
-
-      <section class="sb-section">
-        <div class="sb-label">Live Metrics</div>
-        <div class="metric-grid">
-          <div class="metric-tile">
-            <div class="metric-val" id="statVehicles">0</div>
-            <div class="metric-key">Vehicles</div>
-          </div>
-          <div class="metric-tile">
-            <div class="metric-val mono" id="statFrames">0</div>
-            <div class="metric-key">Frames</div>
-          </div>
-          <div class="metric-tile">
-            <div class="metric-val red" id="statIncidents">0</div>
-            <div class="metric-key">Incidents</div>
-          </div>
-          <div class="metric-tile">
-            <div class="metric-val accent" id="statLatency">—</div>
-            <div class="metric-key">Latency</div>
-          </div>
-        </div>
-      </section>
-
-      <section class="sb-section">
-        <div class="sb-label">Severity Breakdown</div>
-        <div class="sev-list">
-          <div class="sev-row">
-            <span class="sev-pip critical"></span>
-            <span class="sev-name">Critical</span>
-            <span class="sev-count mono" id="statCritical">0</span>
-          </div>
-          <div class="sev-row">
-            <span class="sev-pip major"></span>
-            <span class="sev-name">Major</span>
-            <span class="sev-count mono" id="statMajor">0</span>
-          </div>
-          <div class="sev-row">
-            <span class="sev-pip minor"></span>
-            <span class="sev-name">Minor</span>
-            <span class="sev-count mono" id="statMinor">0</span>
-          </div>
-        </div>
-      </section>
-
-      <section class="sb-section">
-        <div class="sb-label">Session</div>
-        <div class="info-table">
-          <div class="info-row">
-            <span class="info-key">Uptime</span>
-            <span class="info-val mono" id="sessionUptime">00:00</span>
-          </div>
-          <div class="info-row">
-            <span class="info-key">Top Collision</span>
-            <span class="info-val mono" id="topCollision" style="font-size:0.63rem;line-height:1.4;">—</span>
-          </div>
-          <div class="info-row">
-            <span class="info-key">Screenshots</span>
-            <span class="info-val mono" id="screenshotCount">0</span>
-          </div>
-        </div>
-      </section>
-
-      <section class="sb-section">
-        <div class="sb-label">Actions</div>
-        <div class="action-stack">
-          <button id="btnUpload" class="sb-btn">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
-            Upload Video
-          </button>
-          <button id="btnCamera" class="sb-btn camera">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z"/></svg>
-            Live Camera
-          </button>
-          <div class="action-row">
-            <button id="btnStart" class="sb-btn primary" disabled>
-              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-              Start
-            </button>
-            <button id="btnStop" class="sb-btn danger" disabled>
-              <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12"/></svg>
-              Stop
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section class="sb-section sb-last">
-        <div class="sb-label">System Info</div>
-        <div class="info-table">
-          <div class="info-row"><span class="info-key">Model</span><span class="info-val mono">YOLOv8 Custom</span></div>
-          <div class="info-row"><span class="info-key">Classes</span><span class="info-val mono">18 types</span></div>
-          <div class="info-row"><span class="info-key">Target FPS</span><span class="info-val mono">10 fps</span></div>
-          <div class="info-row"><span class="info-key">Resolution</span><span class="info-val mono">720p max</span></div>
-          <div class="info-row"><span class="info-key">Confidence</span><span class="info-val mono">≥ 20%</span></div>
-        </div>
-      </section>
+      <nav class="side-nav">
+        <button class="nav-link active" data-page="live">
+          <span class="nav-icon">Live</span>
+          <span>Live Monitor</span>
+          <span class="nav-ping"></span>
+        </button>
+        <button class="nav-link" data-page="alerts">
+          <span class="nav-icon">Alert</span>
+          <span>Alert Panel</span>
+        </button>
+        <button class="nav-link" data-page="map">
+          <span class="nav-icon">Map</span>
+          <span>Map View</span>
+        </button>
+        <button class="nav-link" data-page="hospital">
+          <span class="nav-icon">Hosp</span>
+          <span>Hospital Portal</span>
+        </button>
+        <button class="nav-link" data-page="history">
+          <span class="nav-icon">Logs</span>
+          <span>History & Logs</span>
+        </button>
+      </nav>
 
     </aside>
 
-    <!-- ── Video Main ── -->
-    <main class="video-main">
-      <div class="video-wrap" id="videoContainer">
-        <canvas id="videoCanvas"></canvas>
+    <main class="main-stage">
+      <header class="topbar">
+        <div class="topbar-title">
+          <div>
+            <h1 id="pageTitle">Live Monitor Dashboard</h1>
+            <p id="pageSubtitle">Real-time accident detection and emergency response coordination</p>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <div class="clock-badge" id="clockBadge">--</div>
+        </div>
+      </header>
 
-        <!-- Standby placeholder -->
-        <div class="vid-placeholder" id="placeholder">
-          <div class="vp-corner tl"></div>
-          <div class="vp-corner tr"></div>
-          <div class="vp-corner bl"></div>
-          <div class="vp-corner br"></div>
-          <div class="vp-scan"></div>
-          <div class="vp-body">
-            <div class="vp-camera-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z"/>
-                <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zM18.75 10.5h.008v.008h-.008V10.5z"/>
-              </svg>
+      <section class="page page-active" data-page="live">
+        <div class="alert-strip" id="liveTicker">System standing by for video upload or live camera stream.</div>
+
+        <div class="stats-grid" id="liveStats">
+          <article class="stat-card accent">
+            <span class="stat-label">Total Accidents</span>
+            <strong class="stat-value" id="statIncidents">0</strong>
+            <span class="stat-caption">Detected today</span>
+          </article>
+          <article class="stat-card amber">
+            <span class="stat-label">Active Alerts</span>
+            <strong class="stat-value" id="liveActiveAlerts">0</strong>
+            <span class="stat-caption">In progress</span>
+          </article>
+          <article class="stat-card blue">
+            <span class="stat-label">Alert Latency</span>
+            <strong class="stat-value" id="statLatency">-</strong>
+            <span class="stat-caption">Average response</span>
+          </article>
+          <article class="stat-card green">
+            <span class="stat-label">Resolved</span>
+            <strong class="stat-value" id="liveResolved">0</strong>
+            <span class="stat-caption">Completed</span>
+          </article>
+        </div>
+
+        <div class="filter-row live-meta-strip">
+          <div class="tool-btn">Vehicles: <strong id="statVehicles">0</strong></div>
+          <div class="tool-btn">Frames: <strong id="statFrames">0</strong></div>
+        </div>
+
+        <div class="live-controls">
+          <button id="btnUpload" class="primary-btn" type="button">Upload Video</button>
+          <button id="btnCamera" class="secondary-btn" type="button">Live Camera</button>
+          <button id="btnStop" class="ghost-btn" type="button" disabled>Stop</button>
+          <button id="soundBtn" class="ghost-btn" type="button">Sound</button>
+        </div>
+
+        <section class="panel video-panel video-panel-expanded">
+          <div class="panel-head">
+            <div>
+              <h2 id="videoPanelTitle">Camera Feed</h2>
+              <p id="videoPanelSubtitle">Backend analysis stream</p>
             </div>
-            <div class="vp-status">STANDBY</div>
-            <div class="vp-desc">Upload CCTV footage or connect a live camera to begin AI‑powered accident detection</div>
-            <div class="vp-actions">
-              <button class="vp-btn" onclick="openUpload()">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
-                Upload Video
-              </button>
-              <button class="vp-btn secondary" onclick="startCamera()">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z"/></svg>
-                Live Camera
-              </button>
+            <div class="panel-head-right">
+              <span class="rec-badge" id="recBadge">REC</span>
+              <span class="fps-badge" id="fpsBadge">-- FPS</span>
             </div>
+          </div>
+
+          <div class="video-frame" id="videoContainer">
+            <video id="uploadPreview" class="upload-preview hidden" muted playsinline></video>
+            <canvas id="videoCanvas"></canvas>
+            <div class="video-placeholder" id="placeholder">
+              <div class="placeholder-badge">Standby</div>
+              <h3>Upload a video or start live camera</h3>
+              <p>The backend will analyze the incoming stream and update the dashboard dynamically.</p>
+            </div>
+            <div class="video-overlay" id="enhancementBadge"></div>
+          </div>
+
+          <div class="video-footer">
+            <div class="progress-track">
+              <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="video-footer-row">
+              <span class="mono" id="timestampBadge">00:00</span>
+              <div class="video-tools">
+                <button class="tool-btn" type="button" onclick="captureScreenshot()">Capture</button>
+                <button class="tool-btn" type="button" id="btnFullscreen"
+                  onclick="toggleFullscreen()">Fullscreen</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="page" data-page="alerts">
+        <div class="page-toolbar">
+          <div class="stats-grid compact-stats">
+            <article class="stat-card accent">
+              <span class="stat-label">Total Alerts</span>
+              <strong class="stat-value" id="alertTotalCount">0</strong>
+            </article>
+            <article class="stat-card green">
+              <span class="stat-label">Agencies Notified</span>
+              <strong class="stat-value" id="agenciesCount">0</strong>
+            </article>
+            <article class="stat-card amber">
+              <span class="stat-label">Auto Escalated</span>
+              <strong class="stat-value" id="autoEscalatedCount">0</strong>
+            </article>
+            <article class="stat-card blue">
+              <span class="stat-label">False Positives</span>
+              <strong class="stat-value" id="falsePositiveRate">&lt;2%</strong>
+            </article>
+          </div>
+          <div class="live-indicator" id="dispatchIndicator">Auto-dispatch active</div>
+        </div>
+
+        <div class="filter-row" id="alertFilters">
+          <button class="filter-pill active" data-alert-filter="all">All</button>
+          <button class="filter-pill" data-alert-filter="Critical">Critical</button>
+          <button class="filter-pill" data-alert-filter="Major">Major</button>
+          <button class="filter-pill" data-alert-filter="Minor">Minor</button>
+        </div>
+
+        <div class="stack-list" id="dispatchList"></div>
+      </section>
+
+      <section class="page hospital-page" data-page="hospital">
+        <div class="hospital-controls">
+          <div class="hosp-filter-row">
+            <button class="filter-btn active" data-hosp-filter="all">All Cases</button>
+            <button class="filter-btn" data-hosp-filter="Active">Active</button>
+            <button class="filter-btn" data-hosp-filter="Accepted">Accepted</button>
+            <button class="filter-btn" data-hosp-filter="Completed">Completed</button>
           </div>
         </div>
 
-        <!-- Active corners -->
-        <div class="vid-corners" id="vidCorners" style="display:none;">
-          <div class="vp-corner tl"></div>
-          <div class="vp-corner tr"></div>
-          <div class="vp-corner bl"></div>
-          <div class="vp-corner br"></div>
+        <div class="hospital-layout">
+          <div id="hospitalAlerts" class="hospital-grid">
+            <!-- Structured cards will be injected here -->
+          </div>
+
+          <aside id="incidentDetail" class="detail-panel hidden">
+            <div class="detail-header">
+              <div class="detail-id-row">
+                <span id="detailId" class="mono-id">INC-0000</span>
+                <button onclick="closeIncidentDetail()" class="close-btn">&times;</button>
+              </div>
+              <h2 id="detailTitle">Incident Detail</h2>
+              <div id="detailLoc" class="detail-loc">Location Loading...</div>
+            </div>
+
+            <div class="detail-content">
+              <div class="detail-meta-grid">
+                <div class="detail-meta-item">
+                  <label>Severity</label>
+                  <span id="detailSeverity" class="badge">--</span>
+                </div>
+                <div class="detail-meta-item text-right">
+                  <label>Time</label>
+                  <span id="detailTime" class="mono">--:--</span>
+                </div>
+                <div class="detail-meta-item">
+                  <label>Status</label>
+                  <span id="detailStatus" class="status-text">--</span>
+                </div>
+                <div class="detail-meta-item text-right">
+                  <label>Confidence</label>
+                  <span id="detailConfidence" class="confidence-pct">--%</span>
+                </div>
+              </div>
+
+              <div class="detail-description">
+                <label>Description</label>
+                <p id="detailDesc">No description available.</p>
+              </div>
+
+              <div class="nearby-hospitals">
+                <h3>Nearby Hospitals</h3>
+                <div id="nearbyHospitalList" class="hosp-list">
+                  <!-- Nearby hospitals injected here -->
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="page" data-page="map">
+        <div class="map-header">
+          <div class="map-legend">
+            <span><i class="legend-dot critical"></i> Accident Location</span>
+            <span><i class="legend-dot blue"></i> Police Station</span>
+            <span><i class="legend-dot green"></i> Hospital</span>
+          </div>
+          <div class="map-actions">
+            <button class="tool-btn" type="button" onclick="centerMap()">Recenter</button>
+            <button class="tool-btn" type="button" onclick="clearMapIncidents()">Clear Pins</button>
+          </div>
+        </div>
+        <div class="panel map-panel">
+          <div id="coimbatoreMap"></div>
+        </div>
+      </section>
+
+      <section class="page" data-page="history">
+        <div class="panel history-chart-panel">
+          <div class="panel-head">
+            <div>
+              <h2>Incident Timeline & Impact</h2>
+              <p>Weekly activity, response quality, and historical incidents</p>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="historyChart"></canvas>
+          </div>
         </div>
 
-        <!-- Drop overlay -->
-        <div class="drop-overlay" id="dropOverlay">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
-          Drop to upload
+        <div class="stats-grid compact-stats">
+          <article class="stat-card green">
+            <span class="stat-label">Avg Response Time</span>
+            <strong class="stat-value" id="historyAvgResponse">0s</strong>
+            <span class="stat-caption">Calculated from incidents</span>
+          </article>
+          <article class="stat-card accent">
+            <span class="stat-label">Response Improvement</span>
+            <strong class="stat-value" id="historyImprovement">0%</strong>
+            <span class="stat-caption">Against manual baseline</span>
+          </article>
+          <article class="stat-card blue">
+            <span class="stat-label">False Positive Rate</span>
+            <strong class="stat-value">&lt;2%</strong>
+            <span class="stat-caption">Target threshold</span>
+          </article>
+          <article class="stat-card amber">
+            <span class="stat-label">Total Incidents</span>
+            <strong class="stat-value" id="historyTotalIncidents">0</strong>
+            <span class="stat-caption">All recorded</span>
+          </article>
         </div>
 
-        <!-- Video action buttons -->
-        <div class="vid-actions-overlay">
-          <button class="vid-action-btn" onclick="captureScreenshot()" title="Capture frame">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z"/>
-              <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0z"/>
-            </svg>
-          </button>
-          <button class="vid-action-btn" onclick="toggleFullscreen()" id="btnFullscreen" title="Fullscreen">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15"/>
-            </svg>
-          </button>
+        <div class="filter-row" id="historyFilters">
+          <button class="filter-pill active" data-history-filter="all">All</button>
+          <button class="filter-pill" data-history-filter="Critical">Critical</button>
+          <button class="filter-pill" data-history-filter="Major">Major</button>
+          <button class="filter-pill" data-history-filter="Minor">Minor</button>
         </div>
 
-        <!-- HUD badges -->
-        <div class="vid-badge-tl" id="enhancementBadge" style="display:none;">NORMAL</div>
-        <div class="vid-badge-tr rec" id="recBadge" style="display:none;">
-          <span class="rec-dot"></span>REC
-        </div>
-
-        <!-- Alert banner -->
-        <div class="vid-alert-banner" id="videoAlertBanner"></div>
-      </div>
-
-      <!-- Video footer -->
-      <div class="video-footer">
-        <div class="progress-track">
-          <div class="progress-fill" id="progressFill"></div>
-        </div>
-        <div class="vid-meta-row">
-          <span class="vid-timestamp" id="timestampBadge">00:00</span>
-          <span class="vid-enhancement" id="vidEnhLabel" style="display:none;"></span>
-        </div>
-      </div>
+        <div class="timeline" id="historyTimeline"></div>
+      </section>
     </main>
-
-    <!-- ── Incident Panel ── -->
-    <aside class="incident-panel">
-      <div class="ip-header">
-        <div class="ip-title-row">
-          <span class="ip-title">Incident Feed</span>
-          <span class="ip-badge" id="alertCountBadge" style="display:none;">0</span>
-        </div>
-        <div class="ip-actions">
-          <button class="ip-icon-btn" id="btnDownload" onclick="downloadReport()" style="display:none;" title="Download report">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M12 3v13.5m0 0l-4.5-4.5m4.5 4.5l4.5-4.5"/></svg>
-            Report
-          </button>
-          <button class="ip-icon-btn danger" id="btnClearLog" onclick="resetAlerts()" style="display:none;" title="Clear log">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
-            Clear
-          </button>
-        </div>
-      </div>
-
-      <div class="filter-tabs" id="filterTabs">
-        <button class="ftab active" data-filter="all">All</button>
-        <button class="ftab" data-filter="Critical">
-          <span class="ftab-dot critical"></span>Critical
-        </button>
-        <button class="ftab" data-filter="Major">
-          <span class="ftab-dot major"></span>Major
-        </button>
-        <button class="ftab" data-filter="Minor">
-          <span class="ftab-dot minor"></span>Minor
-        </button>
-      </div>
-
-      <div class="incident-list" id="alertList">
-        <div class="incident-empty" id="alertEmpty">
-          <svg class="ie-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/>
-          </svg>
-          <div class="ie-title">No Incidents Detected</div>
-          <div class="ie-sub">The AI system is monitoring for accidents in real time</div>
-        </div>
-      </div>
-    </aside>
-
-  </div><!-- workspace -->
-</div><!-- app -->
-
-<!-- ══════════════════════════════════
-     ANALYTICS SECTION
-════════════════════════════════════ -->
-<section class="analytics-section">
-  <div class="analytics-header">
-    <div class="analytics-title-block">
-      <div class="analytics-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"/>
-        </svg>
-      </div>
-      <div>
-        <div class="analytics-title">Live Activity Monitor</div>
-        <div class="analytics-sub">Real-time vehicles &amp; incident tracking — updates every 3 seconds</div>
-      </div>
-    </div>
-    <div class="analytics-stats">
-      <div class="an-stat"><span class="an-stat-val accent" id="anPeakVehicles">0</span><span class="an-stat-key">Peak Vehicles</span></div>
-      <div class="an-stat"><span class="an-stat-val red" id="anTotalInc">0</span><span class="an-stat-key">Total Incidents</span></div>
-      <div class="an-stat"><span class="an-stat-val" id="anRuntime">—</span><span class="an-stat-key">Session Runtime</span></div>
-      <button class="map-clear-btn" onclick="clearChart()" title="Clear chart data">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
-        Clear
-      </button>
-    </div>
-  </div>
-  <div class="analytics-body">
-    <canvas id="activityChart"></canvas>
-  </div>
-</section>
-
-<!-- ══════════════════════════════════
-     LIVE MAP SECTION
-════════════════════════════════════ -->
-<section class="map-section">
-  <div class="map-section-header">
-    <div class="map-title-block">
-      <div class="map-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
-          <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
-        </svg>
-      </div>
-      <div>
-        <div class="map-title">Live Incident Map — Coimbatore</div>
-        <div class="map-sub" id="mapSubLabel">Real-time accident hotspot monitoring across the city</div>
-      </div>
-    </div>
-    <div class="map-controls">
-      <div class="map-legend">
-        <span class="legend-dot critical"></span><span class="legend-label">Critical</span>
-        <span class="legend-dot major"></span><span class="legend-label">Major</span>
-        <span class="legend-dot minor"></span><span class="legend-label">Minor</span>
-        <span class="legend-dot hotspot"></span><span class="legend-label">Hotspot</span>
-      </div>
-      <button class="map-setloc-btn" id="btnSetLocation" onclick="enterSetLocationMode()" title="Set camera location on map">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"/>
-          <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"/>
-        </svg>
-        Set Location
-      </button>
-      <button class="map-center-btn" id="btnMapCenter" onclick="centerMap()" title="Center on Coimbatore">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>
-        </svg>
-        Recenter
-      </button>
-      <button class="map-clear-btn" id="btnMapClear" onclick="clearMapIncidents()" title="Clear incident pins">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
-        </svg>
-        Clear Pins
-      </button>
-    </div>
   </div>
 
-  <!-- Camera location banner — shown when location is not yet set for uploaded video -->
-  <div class="loc-banner" id="locBanner" style="display:none;">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;flex-shrink:0;">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"/>
-      <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"/>
-    </svg>
-    <span id="locBannerText">Click anywhere on the map below to mark the camera location for this footage</span>
-    <button class="loc-banner-cancel" onclick="exitSetLocationMode()">Cancel</button>
-  </div>
-
-  <!-- GPS info bar — shown when location is confirmed -->
-  <div class="loc-info-bar" id="locInfoBar" style="display:none;">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;color:var(--accent);flex-shrink:0;">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-    </svg>
-    <span class="loc-info-source" id="locSourceLabel">GPS</span>
-    <span class="loc-info-coords" id="locCoordsLabel">—</span>
-    <span class="loc-info-acc" id="locAccLabel"></span>
-    <button class="loc-info-change" onclick="enterSetLocationMode()">Change</button>
-  </div>
-
-  <div class="map-stats-bar">
-    <div class="map-stat"><span class="map-stat-val" id="mapStatTotal">0</span><span class="map-stat-key">Incidents Mapped</span></div>
-    <div class="map-stat"><span class="map-stat-val red" id="mapStatCritical">0</span><span class="map-stat-key">Critical</span></div>
-    <div class="map-stat"><span class="map-stat-val orange" id="mapStatMajor">0</span><span class="map-stat-key">Major</span></div>
-    <div class="map-stat"><span class="map-stat-val yellow" id="mapStatMinor">0</span><span class="map-stat-key">Minor</span></div>
-    <div class="map-stat"><span class="map-stat-val accent" id="mapLastUpdate">—</span><span class="map-stat-key">Last Update</span></div>
-  </div>
-  <div class="map-container-wrap" id="mapContainerWrap">
-    <div id="coimbatoreMap"></div>
-    <div class="map-overlay-badge">
-      <span class="live-dot"></span>LIVE MONITORING
-    </div>
-    <!-- Click-to-set overlay -->
-    <div class="map-setloc-overlay" id="mapSetLocOverlay" style="display:none;">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:32px;height:32px;">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"/>
-        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"/>
-      </svg>
-      Click on the map to place the camera
-    </div>
-  </div>
-</section>
-
-<!-- Chart.js -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<!-- Leaflet JS -->
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/static/js/app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="js/app.js"></script>
 </body>
+
 </html>

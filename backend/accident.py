@@ -11,9 +11,8 @@ from backend.tracker import Track, iou
 
 
 SEVERITY_THRESHOLDS = {
-    "Critical": 0.65,
-    "Major":    0.35,
-    "Minor":    0.10,
+    "Critical": 0.75,
+    "Major":    0.40,
 }
 
 SEVERITY_COLORS = {
@@ -56,10 +55,10 @@ class Incident:
 class AccidentDetector:
     def __init__(
         self,
-        iou_collision_threshold: float = 0.08,
-        speed_drop_ratio: float = 0.55,
-        min_speed_for_crash: float = 2.5,
-        cooldown_frames: int = 60,
+        iou_collision_threshold: float = 0.25,
+        speed_drop_ratio: float = 0.60,
+        min_speed_for_crash: float = 5.0,
+        cooldown_frames: int = 120,
     ):
         self.iou_threshold = iou_collision_threshold
         self.speed_drop_ratio = speed_drop_ratio
@@ -128,10 +127,13 @@ class AccidentDetector:
         drop_b = max(0.0, min(1.0, drop_b))
         speed_signal = max(drop_a, drop_b)
 
-        overlap_signal = min(1.0, overlap / 0.35)   # 0.35 IoU → full score
+        # Require substantial overlap (0.40 IoU) before overlap contributes fully.
+        # Prevents two cars driving close from triggering false positives.
+        overlap_signal = min(1.0, overlap / 0.40)
 
-        # Weighted combination: approach velocity is the strongest physical indicator
-        score = 0.30 * speed_signal + 0.35 * overlap_signal + 0.35 * approach_vel
+        # Reweighted: overlap + approach carry the collision signal;
+        # speed drop boosts severity but is not required to fire.
+        score = 0.30 * speed_signal + 0.45 * overlap_signal + 0.25 * approach_vel
         return float(np.clip(score, 0.0, 1.0))
 
     def detect(
@@ -164,7 +166,41 @@ class AccidentDetector:
                 if overlap < self.iou_threshold:
                     continue
 
+                # Skip tiny/distant vehicles — perspective causes bbox overlap
+                # for far-away highway traffic even with no real collision.
+                area_a = (ta.bbox[2] - ta.bbox[0]) * (ta.bbox[3] - ta.bbox[1])
+                area_b = (tb.bbox[2] - tb.bbox[0]) * (tb.bbox[3] - tb.bbox[1])
+                if min(area_a, area_b) < 800:
+                    continue
+
                 approach_vel = self._approach_velocity(ta, tb)
+
+                speed_drop_a = (1.0 - ta.speed / ta.avg_speed) if ta.avg_speed > self.min_speed_for_crash else 0.0
+                speed_drop_b = (1.0 - tb.speed / tb.avg_speed) if tb.avg_speed > self.min_speed_for_crash else 0.0
+                speed_signal = max(0.0, speed_drop_a, speed_drop_b)
+
+                # Car-car, car-bus, and car-truck pairs generate many false
+                # positives on busy roads (tailgating, lane-changes, merging).
+                # Require BOTH a strong approach velocity AND a speed drop —
+                # highway traffic satisfies one or the other but rarely both.
+                pair_cls = frozenset([ta.class_name, tb.class_name])
+                _STRICT_PAIRS = {
+                    frozenset(["car",   "car"]),
+                    frozenset(["car",   "bus"]),
+                    frozenset(["car",   "truck"]),
+                    frozenset(["truck", "truck"]),
+                }
+                if pair_cls in _STRICT_PAIRS:
+                    if approach_vel < 0.40 or speed_signal < 0.35:
+                        continue
+
+                # For other pairs: require at least some signal unless overlap
+                # is very high (≥ 0.55).  Prevents tailgating false-positives
+                # while still catching real collisions where the peak closing
+                # speed was already past by the sampled frame.
+                if overlap < 0.55 and approach_vel < 0.20 and speed_signal < 0.20:
+                    continue
+
                 score = self._compute_score(
                     overlap,
                     ta.speed, tb.speed,
@@ -172,7 +208,7 @@ class AccidentDetector:
                     approach_vel,
                 )
 
-                if score < SEVERITY_THRESHOLDS["Minor"]:
+                if score < SEVERITY_THRESHOLDS["Major"]:
                     continue
 
                 if score > best_score:

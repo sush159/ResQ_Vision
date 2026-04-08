@@ -437,9 +437,16 @@ function handleUploadStreamMessage(msg, sourceName) {
   }
 
   if (msg.type === "frame") {
+    if (msg.frame) drawFrame(msg.frame);
     if (msg.stats) updateFeedStats(msg.stats);
     if (typeof msg.progress === "number" && msg.progress >= 0) progressFill.style.width = `${msg.progress}%`;
     if (typeof msg.timestamp === "number") timestampBadge.textContent = formatTime(msg.timestamp);
+    if (msg.alert && !state.uploadAlertTriggered) {
+      state.uploadAlertTriggered = true;
+      pauseUploadAtIncident(msg.alert);
+      ingestIncident(msg.alert, { source: sourceName || "Uploaded video", fromLive: false });
+      liveTicker.textContent = "Accident detected. Playback paused and emergency workflow triggered.";
+    }
     return;
   }
 
@@ -642,6 +649,10 @@ function handleRealtimeMessage(msg, meta = {}) {
     if (typeof msg.timestamp === "number") timestampBadge.textContent = formatTime(msg.timestamp);
     enhancementBadge.style.display = msg.enhancement_mode && msg.enhancement_mode !== "Normal" ? "block" : "none";
     enhancementBadge.textContent = msg.enhancement_mode || "";
+    // Alert may be embedded directly in frame message as a fallback
+    if (msg.alert) {
+      ingestIncident(msg.alert, { source: meta.source || "Live feed", fromLive: true });
+    }
     return;
   }
 
@@ -755,7 +766,6 @@ function normalizeIncident(raw, meta = {}) {
     { ...RESPONDERS.ambulance, status: "Notified" },
     { ...RESPONDERS.hospital, status: severity === "Minor" ? "Pending" : "Notified" },
   ];
-
   return {
     id: raw.incident_id || `INC-${String(index + 1).padStart(4, "0")}`,
     severity,
@@ -779,7 +789,7 @@ function normalizeIncident(raw, meta = {}) {
 function ingestIncident(raw, meta = {}) {
   const incident = normalizeIncident(raw, meta);
   state.incidents.unshift(incident);
-  if (incident.severity === "Critical" || incident.severity === "Major") {
+  if (incident.severity === "Major" || incident.severity === "Critical") {
     showEmergencyModal(incident);
   }
   triggerAlertEffects(incident);
@@ -789,7 +799,6 @@ function ingestIncident(raw, meta = {}) {
 }
 
 function triggerAlertEffects(incident) {
-  if (!state.soundEnabled) return;
   const flash = document.getElementById("screenFlash");
   flash.className = `screen-flash ${incident.severity}`;
   setTimeout(() => {

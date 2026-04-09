@@ -9,6 +9,31 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
 from backend.tracker import Track, iou
 
+# ── Firebase imports ──
+import firebase_admin
+from firebase_admin import credentials, db as firebase_db
+import requests
+import os
+
+# ── Firebase init (runs once when module loads) ──
+def _init_firebase():
+    if not firebase_admin._apps:
+        cred = credentials.Certificate(
+            os.path.join(os.path.dirname(__file__), '../serviceAccountKey.json'))
+        firebase_admin.initialize_app(cred, {
+            'databaseURL': 'https://accident-alert-system-18326-default-rtdb.firebaseio.com'
+        })
+
+def _get_gps():
+    try:
+        res = requests.get('https://ipapi.co/json/', timeout=5)
+        data = res.json()
+        return data['latitude'], data['longitude']
+    except:
+        return 11.0168, 76.9558  # fallback: Coimbatore center
+
+_init_firebase()
+
 
 SEVERITY_THRESHOLDS = {
     "Critical": 0.75,
@@ -87,7 +112,7 @@ class AccidentDetector:
         """
         Measures how fast the two vehicles are closing on each other along
         the line connecting their centres.  Positive = approaching, 0 = stationary.
-        Normalised to [0, 1] where 1 = closing at ≥ 12 px/frame (fast approach).
+        Normalised to [0, 1] where 1 = closing at >= 12 px/frame (fast approach).
         """
         if not ta.history or not tb.history:
             return 0.0
@@ -102,8 +127,6 @@ class AccidentDetector:
         vbx, vby = tb.velocity
         rel_vx = vax - vbx
         rel_vy = vay - vby
-        # Dot product of relative velocity with the unit vector from b→a
-        # Positive means they are moving toward each other
         approach = -(rel_vx * dx + rel_vy * dy) / dist
         return float(np.clip(approach / 12.0, 0.0, 1.0))
 
@@ -122,20 +145,23 @@ class AccidentDetector:
           - speed_signal    : sudden deceleration of either vehicle
           - approach_signal : how fast the vehicles were closing before impact
         """
-        # Speed drop: current speed much lower than historical avg → severe impact
         drop_a = 1.0 - (speed_a / avg_speed_a) if avg_speed_a > self.min_speed_for_crash else 0.0
         drop_b = 1.0 - (speed_b / avg_speed_b) if avg_speed_b > self.min_speed_for_crash else 0.0
         drop_a = max(0.0, min(1.0, drop_a))
         drop_b = max(0.0, min(1.0, drop_b))
         speed_signal = max(drop_a, drop_b)
 
-        # Require substantial overlap (0.40 IoU) before overlap contributes fully.
-        # Prevents two cars driving close from triggering false positives.
-        overlap_signal = min(1.0, overlap / 0.40)
+speed_signal = max(drop_a, drop_b)
 
-        # Reweighted: overlap + approach carry the collision signal;
-        # speed drop boosts severity but is not required to fire.
-        score = 0.30 * speed_signal + 0.45 * overlap_signal + 0.25 * approach_vel
+# Require substantial overlap (0.40 IoU) before overlap contributes fully.
+# Prevents two cars driving close from triggering false positives.
+overlap_signal = min(1.0, overlap / 0.40)
+
+# Reweighted: overlap + approach carry the collision signal;
+# speed drop boosts severity but is not required to fire.
+score = 0.30 * speed_signal + 0.45 * overlap_signal + 0.25 * approach_vel
+
+return float(np.clip(score, 0.0, 1.0))
         return float(np.clip(score, 0.0, 1.0))
 
     def detect(
@@ -234,5 +260,24 @@ class AccidentDetector:
                         score=score,
                     )
                     self._last_incident_frames[pair_key] = frame_number
+
+                    # ── Send Firebase alert immediately ──
+                    try:
+                        lat, lon = _get_gps()
+                        firebase_db.reference('/alerts').push({
+                            "lat": lat,
+                            "lon": lon,
+                            "description": f"{severity} accident — {collision_type}",
+                            "incident_id": incident_id,
+                            "severity": severity,
+                            "collision_type": collision_type,
+                            "score": round(score, 3),
+                            "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
+                            "location": "Coimbatore",
+                            "status": "pending"
+                        })
+                        print(f"🚨 Firebase alert sent: {incident_id} — {severity}")
+                    except Exception as e:
+                        print(f"⚠️ Firebase error (non-fatal): {e}")
 
         return best_incident

@@ -22,10 +22,13 @@ const state = {
   sessionTimer: null,
   sessionStartedAt: null,
   frameReceiveTime: 0,
+  lastPage: "live",
   map: null,
   mapMarkers: [],
   historyChart: null,
   uploadPreviewUrl: null,
+  uploadSessions: [],
+  activeUploadId: null,
   selectedIncidentId: null,
   activeHospFilter: "all",
 };
@@ -33,6 +36,7 @@ const state = {
 const canvas = document.getElementById("videoCanvas");
 const ctx = canvas.getContext("2d");
 const uploadPreview = document.getElementById("uploadPreview");
+const incidentClip = document.getElementById("incidentClip");
 const placeholder = document.getElementById("placeholder");
 const uploadModal = document.getElementById("uploadModal");
 const uploadBox = document.getElementById("uploadBox");
@@ -52,10 +56,12 @@ const fpsBadge = document.getElementById("fpsBadge");
 const progressFill = document.getElementById("progressFill");
 const timestampBadge = document.getElementById("timestampBadge");
 const enhancementBadge = document.getElementById("enhancementBadge");
-const liveTicker = document.getElementById("liveTicker");
+const liveTicker = document.getElementById("liveTicker") || document.createElement("div");
 const dispatchList = document.getElementById("dispatchList");
 const historyTimeline = document.getElementById("historyTimeline");
 const clockBadge = document.getElementById("clockBadge");
+const dateBadge = document.getElementById("dateBadge");
+const timeBadge = document.getElementById("timeBadge");
 
 const hospitalAlerts = document.getElementById("hospitalAlerts");
 const incidentDetail = document.getElementById("incidentDetail");
@@ -99,14 +105,18 @@ const PAGE_META = {
     subtitle: "Live incident locations and responder coverage",
   },
   history: {
-    title: "Incident Timeline & Impact",
-    subtitle: "Full history of detected incidents, actions taken, and response impact",
+    title: "Progress Tracker",
+    subtitle: "Incident workflow progress and analytics",
   },
   hospital: {
     title: "Hospital Emergency Portal",
     subtitle: "Real-time trauma alerts and response coordination",
   },
 };
+
+const UPLOAD_DB_NAME = "resq-vision-upload-cache";
+const UPLOAD_STORE_NAME = "videoFiles";
+const UPLOAD_RECORD_KEY = "lastUploadVideo";
 
 const LOCATION_PRESETS = [
   { label: "NH-44, Krishnagiri", lat: 12.5266, lng: 78.2137 },
@@ -159,7 +169,7 @@ async function checkBackendHealth() {
     if (!res.ok || payload.status !== "ok") {
       throw new Error(payload.detail || payload.message || "Backend health check failed");
     }
-    setStatus("ready", "Backend Ready");
+    setStatus("ready", "Monitoring Active");
     liveTicker.textContent = "Backend connected. Upload a video or start live camera monitoring.";
   } catch (error) {
     setStatus("alert", "Backend Offline");
@@ -186,18 +196,25 @@ function formatTime(seconds) {
 }
 
 function formatClock(date = new Date()) {
-  return new Intl.DateTimeFormat("en-IN", {
+  const dateStr = new Intl.DateTimeFormat("en-IN", {
     day: "numeric",
     month: "numeric",
     year: "numeric",
+  }).format(date);
+  
+  const timeStr = new Intl.DateTimeFormat("en-IN", {
     hour: "numeric",
     minute: "2-digit",
     second: "2-digit",
   }).format(date);
+  
+  return { date: dateStr, time: timeStr };
 }
 
 function cycleClock() {
-  clockBadge.textContent = formatClock();
+  const { date, time } = formatClock();
+  if (dateBadge) dateBadge.textContent = date;
+  if (timeBadge) timeBadge.textContent = time;
 }
 
 function setupNavigation() {
@@ -213,6 +230,7 @@ function setupNavigation() {
 }
 
 function switchPage(page) {
+  state.lastPage = page;
   document.querySelectorAll(".nav-link").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.page === page);
   });
@@ -334,7 +352,9 @@ async function handleFile(file) {
   btnCamera.disabled = true;
   btnStop.disabled = false;
   progressFill.style.width = "10%";
-  showUploadPreview(file);
+  const currentUpload = createUploadSession(file, file.name);
+  showUploadPreview(currentUpload);
+  storeUploadFile(currentUpload.id, file);
   videoPanelTitle.textContent = file.name || "Uploaded Video";
   videoPanelSubtitle.textContent = "Playing local preview while backend analysis runs";
   timestampBadge.textContent = "Analyzing...";
@@ -353,7 +373,7 @@ async function handleFile(file) {
       throw new Error("Upload job did not start correctly");
     }
     state.uploadJobId = payload.job_id;
-    connectUploadStream(payload.job_id, file.name);
+    connectUploadStream(payload.job_id, currentUpload.id);
   } catch (error) {
     const msg = error instanceof TypeError
       ? `Could not reach backend at ${API || LOCAL_API_BASE}`
@@ -374,23 +394,100 @@ function persistDashboardState() {
         timestamp: incident.timestamp instanceof Date ? incident.timestamp.toISOString() : incident.timestamp,
       })),
       lastStats: state.lastStats || {},
+      selectedIncidentId: state.selectedIncidentId,
+      lastPage: state.lastPage,
+      uploadSourceFps: state.uploadSourceFps,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
   } catch {}
 }
 
-function restoreDashboardState() {
+async function restoreDashboardState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
-    const payload = JSON.parse(raw);
-    const incidents = Array.isArray(payload.incidents) ? payload.incidents : [];
-    state.incidents = incidents.map((incident) => ({
-      ...incident,
-      timestamp: incident.timestamp ? new Date(incident.timestamp) : new Date(),
-    }));
-    state.lastStats = payload.lastStats || {};
+    if (raw) {
+      const payload = JSON.parse(raw);
+      const incidents = Array.isArray(payload.incidents) ? payload.incidents : [];
+      state.incidents = incidents.map((incident) => ({
+        ...incident,
+        uid: incident.uid || `uid-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+        timestamp: incident.timestamp ? new Date(incident.timestamp) : new Date(),
+        sourceUrl: incident.uploadId ? null : incident.sourceUrl || null,
+      }));
+      state.lastStats = payload.lastStats || {};
+      state.selectedIncidentId = payload.selectedIncidentId || null;
+      state.lastPage = payload.lastPage || "live";
+      state.uploadSourceFps = payload.uploadSourceFps || 25;
+    }
+    const storedFiles = await loadStoredUploadFiles();
+    storedFiles.forEach((record) => {
+      createUploadSession(record.file, record.name, record.id);
+    });
   } catch {}
+}
+
+function openUploadDatabase() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) return reject(new Error("IndexedDB not supported"));
+    const request = window.indexedDB.open(UPLOAD_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(UPLOAD_STORE_NAME)) {
+        db.createObjectStore(UPLOAD_STORE_NAME, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function storeUploadFile(uploadId, file) {
+  try {
+    const db = await openUploadDatabase();
+    const tx = db.transaction(UPLOAD_STORE_NAME, "readwrite");
+    const store = tx.objectStore(UPLOAD_STORE_NAME);
+    store.put({ id: uploadId, file, name: file.name, type: file.type, updatedAt: Date.now() });
+    await new Promise((resolve, reject) => {
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+    db.close();
+  } catch {
+    // Fail silently if storage isn't available.
+  }
+}
+
+async function removeStoredUploadFile(uploadId) {
+  try {
+    const db = await openUploadDatabase();
+    const tx = db.transaction(UPLOAD_STORE_NAME, "readwrite");
+    const store = tx.objectStore(UPLOAD_STORE_NAME);
+    store.delete(uploadId);
+    await new Promise((resolve, reject) => {
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+    db.close();
+  } catch {
+    // Fail silently
+  }
+}
+
+async function loadStoredUploadFiles() {
+  try {
+    const db = await openUploadDatabase();
+    const tx = db.transaction(UPLOAD_STORE_NAME, "readonly");
+    const store = tx.objectStore(UPLOAD_STORE_NAME);
+    const request = store.getAll();
+    return await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    }).finally(() => db.close());
+  } catch {
+    return [];
+  }
 }
 
 async function parseApiResponse(res) {
@@ -403,13 +500,47 @@ async function parseApiResponse(res) {
   }
 }
 
-function connectUploadStream(jobId, sourceName) {
-  closeUploadStream();
-  state.uploadWs = new WebSocket(`${resolveWsBase()}/ws/${jobId}`);
+function createUploadSession(file, name, id = null) {
+  const url = URL.createObjectURL(file);
+  const sessionId = id || `upload-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+  const session = {
+    id: sessionId,
+    name: name || file.name || "Uploaded Video",
+    file,
+    url,
+    fps: 25,
+  };
+  state.uploadSessions.unshift(session);
+  if (!id) { // only set active for new uploads
+    state.activeUploadId = session.id;
+    state.uploadPreviewUrl = url;
+  }
+  return session;
+}
 
+function getUploadSession(uploadId) {
+  return state.uploadSessions.find((session) => session.id === uploadId) || null;
+}
+
+function getActiveUploadSession() {
+  return getUploadSession(state.activeUploadId);
+}
+
+function resolveIncidentMedia(incident) {
+  const session = incident?.uploadId ? getUploadSession(incident.uploadId) : null;
+  return {
+    sourceUrl: session?.url || incident?.sourceUrl || state.uploadPreviewUrl,
+    sourceFps: incident?.sourceFps || session?.fps || state.uploadSourceFps || 25,
+  };
+}
+
+function connectUploadStream(jobId, uploadId) {
+  closeUploadStream();
+  const session = getUploadSession(uploadId);
+  state.uploadWs = new WebSocket(`${resolveWsBase()}/ws/${jobId}`);
   state.uploadWs.onmessage = (event) => {
     const msg = JSON.parse(event.data);
-    handleUploadStreamMessage(msg, sourceName);
+    handleUploadStreamMessage(msg, uploadId);
   };
 
   state.uploadWs.onerror = () => {
@@ -427,11 +558,15 @@ function connectUploadStream(jobId, sourceName) {
   };
 }
 
-function handleUploadStreamMessage(msg, sourceName) {
+function handleUploadStreamMessage(msg, uploadId) {
+  const session = getUploadSession(uploadId);
+  const sourceName = session?.name || "Uploaded Video";
   if (msg.type === "start") {
-    state.uploadSourceFps = msg.fps || 25;
+    const fps = msg.fps || 25;
+    state.uploadSourceFps = fps;
+    if (session) session.fps = fps;
     setStatus("active", "Analyzing Upload");
-    videoPanelTitle.textContent = sourceName || "Uploaded Video";
+    videoPanelTitle.textContent = sourceName;
     videoPanelSubtitle.textContent = "Realtime accident scan on uploaded footage";
     return;
   }
@@ -445,8 +580,14 @@ function handleUploadStreamMessage(msg, sourceName) {
 
   if (msg.type === "alert" && msg.incident) {
     state.uploadAlertTriggered = true;
-    pauseUploadAtIncident(msg.incident);
-    ingestIncident(msg.incident, { source: sourceName || "Uploaded video", fromLive: false });
+    pauseUploadAtIncident(msg.incident, session);
+    ingestIncident(msg.incident, {
+      source: sourceName,
+      fromLive: false,
+      sourceUrl: session?.url,
+      sourceFps: session?.fps,
+      uploadId: session?.id,
+    });
     liveTicker.textContent = "Accident detected. Playback paused and emergency workflow triggered.";
     return;
   }
@@ -493,7 +634,15 @@ function applyAnalysisResult(payload, sourceName) {
 
   const alerts = Array.isArray(payload.alerts) ? payload.alerts : [];
   if (alerts.length) {
-    alerts.forEach((alert, index) => ingestIncident(alert, { source: sourceName || "Uploaded video", order: index, fromLive: false }));
+    const session = getActiveUploadSession();
+    alerts.forEach((alert, index) => ingestIncident(alert, {
+      source: sourceName || "Uploaded video",
+      order: index,
+      fromLive: false,
+      sourceUrl: session?.url,
+      sourceFps: session?.fps,
+      uploadId: session?.id,
+    }));
   } else {
     renderAll();
   }
@@ -699,9 +848,9 @@ function finishUploadSession(options = {}) {
   }
 }
 
-function pauseUploadAtIncident(incident) {
+function pauseUploadAtIncident(incident, uploadSession) {
   if (!uploadPreview) return;
-  const fps = state.uploadSourceFps || 25;
+  const fps = uploadSession?.fps || state.uploadSourceFps || 25;
   const incidentTime = incident.frame_number ? Math.max(0, incident.frame_number / fps) : uploadPreview.currentTime;
   try {
     uploadPreview.currentTime = incidentTime;
@@ -709,13 +858,16 @@ function pauseUploadAtIncident(incident) {
   uploadPreview.pause();
 }
 
-function showUploadPreview(file) {
+function showUploadPreview(source) {
   if (!uploadPreview) return;
-  if (state.uploadPreviewUrl) {
-    URL.revokeObjectURL(state.uploadPreviewUrl);
+  let url;
+  if (source && source.url) {
+    url = source.url;
+  } else {
+    url = URL.createObjectURL(source);
   }
-  state.uploadPreviewUrl = URL.createObjectURL(file);
-  uploadPreview.src = state.uploadPreviewUrl;
+  state.uploadPreviewUrl = url;
+  uploadPreview.src = url;
   uploadPreview.classList.remove("hidden");
   uploadPreview.currentTime = 0;
   uploadPreview.playbackRate = 0.9;
@@ -734,6 +886,51 @@ function hideUploadPreview() {
     URL.revokeObjectURL(state.uploadPreviewUrl);
     state.uploadPreviewUrl = null;
   }
+}
+
+function showIncidentClip(source, startTime = 0) {
+  if (!incidentClip) return;
+  if (!source) {
+    incidentClip.pause();
+    incidentClip.removeAttribute("src");
+    incidentClip.classList.add("hidden");
+    return;
+  }
+
+  const seekStart = Math.max(0, startTime);
+  incidentClip.pause();
+  incidentClip.removeAttribute("src");
+  incidentClip.load();
+
+  if (incidentClip._metadataListener) {
+    incidentClip.removeEventListener("loadedmetadata", incidentClip._metadataListener);
+    incidentClip._metadataListener = null;
+  }
+
+  const handleLoadedMetadata = () => {
+    incidentClip.currentTime = seekStart;
+    incidentClip.removeEventListener("loadedmetadata", handleLoadedMetadata);
+    incidentClip._metadataListener = null;
+    incidentClip.play().catch(() => {});
+  };
+
+  incidentClip._metadataListener = handleLoadedMetadata;
+  incidentClip.src = source;
+  incidentClip.classList.remove("hidden");
+  incidentClip.addEventListener("loadedmetadata", handleLoadedMetadata);
+  incidentClip.load();
+
+  if (incidentClip.readyState >= 1) {
+    incidentClip.currentTime = seekStart;
+    incidentClip.play().catch(() => {});
+  }
+}
+
+function hideIncidentClip() {
+  if (!incidentClip) return;
+  incidentClip.pause();
+  incidentClip.removeAttribute("src");
+  incidentClip.classList.add("hidden");
 }
 
 function updateFeedStats(stats) {
@@ -758,6 +955,7 @@ function normalizeIncident(raw, meta = {}) {
 
   return {
     id: raw.incident_id || `INC-${String(index + 1).padStart(4, "0")}`,
+    uid: `uid-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
     severity,
     type: raw.collision_type ? raw.collision_type.replace(/[_-]/g, " ") : "Vehicle collision",
     score: Math.round((raw.score || 0.68) * 100),
@@ -767,11 +965,15 @@ function normalizeIncident(raw, meta = {}) {
     lng: meta.lng || preset.lng + (Math.random() - 0.5) * 0.05,
     reference: ref,
     source: meta.source || "Backend stream",
+    sourceUrl: meta.sourceUrl || null,
+    sourceFps: meta.sourceFps || 25,
+    uploadId: meta.uploadId || null,
     status: severity === "Minor" ? "Resolved" : "Responding",
     agencies,
     responseTime,
     improvement: severity === "Critical" ? 58 : severity === "Major" ? 44 : 31,
     autoEscalated: severity !== "Minor",
+    frame_number: raw.frame_number || raw.frame || null,
     raw,
   };
 }
@@ -829,8 +1031,8 @@ function renderHospitalPortal() {
   }
 
   hospitalAlerts.innerHTML = items.map(incident => `
-    <div class="hospital-card ${state.selectedIncidentId === incident.id ? "active-selection" : ""}" 
-         onclick="selectIncident('${incident.id}')" 
+    <div class="hospital-card ${state.selectedIncidentId === incident.uid ? "active-selection" : ""}" 
+         onclick="selectIncident('${incident.uid}')" 
          data-severity="${incident.severity}">
       <div class="card-top">
         <span class="card-id">${incident.id}</span>
@@ -846,10 +1048,18 @@ function renderHospitalPortal() {
   `).join("");
 }
 
-function selectIncident(id) {
-  state.selectedIncidentId = id;
-  const incident = state.incidents.find((inc) => inc.id === id);
+function selectIncident(uid) {
+  state.selectedIncidentId = uid;
+  const incident = state.incidents.find((inc) => inc.uid === uid);
   if (!incident) return;
+
+  const { sourceUrl, sourceFps } = resolveIncidentMedia(incident);
+  if (sourceUrl) {
+    const startTime = incident.frame_number ? Math.max(0, incident.frame_number / sourceFps) : 0;
+    showIncidentClip(sourceUrl, startTime);
+  } else {
+    hideIncidentClip();
+  }
 
   const panel = document.getElementById("incidentDetail");
   if (panel) {
@@ -911,6 +1121,7 @@ function closeIncidentDetail() {
   state.selectedIncidentId = null;
   const panel = document.getElementById("incidentDetail");
   if (panel) panel.classList.add("hidden");
+  hideIncidentClip();
   document.querySelector('.hospital-layout').classList.remove('panel-open');
   renderHospitalPortal();
 }
@@ -971,7 +1182,7 @@ function renderDispatchList() {
   }
 
   dispatchList.innerHTML = items.map((incident) => `
-    <article class="dispatch-card">
+    <article class="dispatch-card clickable-card" onclick="viewIncidentFullDetail('${incident.uid}')">
       <div class="dispatch-header">
         <div>
           <div class="dispatch-title-row">
@@ -985,19 +1196,13 @@ function renderDispatchList() {
         </div>
         <div class="mono">${incident.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
       </div>
-      <div class="dispatch-agencies">
-        ${incident.agencies.map((agency) => `
-          <div class="agency-card ${agency.status === "Pending" ? "pending" : ""}">
-            <span>${agency.label}</span>
-            <strong>${agency.status}</strong>
-          </div>
-        `).join("")}
-      </div>
+
     </article>
   `).join("");
 }
 
 function renderHistoryTimeline() {
+  if (!historyTimeline) return;
   const items = getFilteredIncidents(state.activeHistoryFilter);
   if (!items.length) {
     historyTimeline.innerHTML = `<article class="timeline-card"><div class="timeline-title">No history yet</div><div class="timeline-sub">Completed incidents will appear in this timeline.</div></article>`;
@@ -1037,8 +1242,6 @@ function initMap() {
   }).addTo(state.map);
 
   [
-    { label: "Police Station", lat: 12.94, lng: 77.59, color: "#4f89ff" },
-    { label: "Police Station", lat: 11.66, lng: 78.15, color: "#4f89ff" },
     { label: "Hospital", lat: 11.01, lng: 76.95, color: "#33d06f" },
   ].forEach((point) => {
     const marker = L.circleMarker([point.lat, point.lng], {
@@ -1101,20 +1304,100 @@ function severityColor(severity) {
   return "#4f89ff";
 }
 
+function renderHistoryAnalytics() {
+  const incidents = state.incidents || [];
+  const total = incidents.length;
+  const active = incidents.filter((incident) => incident.status === "Responding").length;
+  const resolved = incidents.filter((incident) => incident.status === "Resolved").length;
+  const alertsSent = total;
+  const responseTimes = incidents.map((incident) => Number(incident.responseTime) || 0).filter((value) => value > 0);
+  const averageResponse = responseTimes.length ? responseTimes.reduce((sum, value) => sum + value, 0) / responseTimes.length : 0;
+  const fastestResponse = responseTimes.length ? Math.min(...responseTimes) : 0;
+  const slowestResponse = responseTimes.length ? Math.max(...responseTimes) : 0;
+const avgConfidence = 0;
+const detectionAccuracy = 0;
+  const falsePositive = 0;
+  const avgImprovement = 0;
+  const agenciesNotified = incidents.reduce((sum, incident) => sum + incident.agencies.filter((agency) => agency.status !== "Pending").length, 0);
+  const livesSaved = Math.round(total * 2.7);
+
+  const hourCounts = incidents.reduce((counts, incident) => {
+    const timestamp = new Date(incident.timestamp);
+    const hour = timestamp.getHours();
+    counts[hour] = (counts[hour] || 0) + 1;
+    return counts;
+  }, {});
+  const peakHour = Object.entries(hourCounts).reduce((best, [hour, count]) => (count > best.count ? { hour: Number(hour), count } : best), { hour: null, count: 0 });
+  const peakTimeLabel = peakHour.hour !== null ? `${peakHour.hour}:00 - ${peakHour.hour + 1}:00` : "No data";
+
+  const locationCounts = incidents.reduce((counts, incident) => {
+    const location = incident.locationLabel || "Unknown";
+    counts[location] = (counts[location] || 0) + 1;
+    return counts;
+  }, {});
+  const topLocation = Object.entries(locationCounts).sort((a, b) => b[1] - a[1])[0];
+  const locationLabel = topLocation ? topLocation[0] : "TBD";
+
+  const responsiveHospital = "No data";
+
+  const setText = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+  };
+
+  setText("metricTotalAccidents", total);
+  setText("metricActiveIncidents", active);
+  setText("metricResolvedIncidents", resolved);
+  setText("metricAlertsSent", alertsSent);
+  setText("metricAvgResponseTime", `${Math.round(averageResponse)}s`);
+  setText("metricFastestResponseTime", `${Math.round(fastestResponse)}s`);
+  setText("metricSlowestResponseTime", `${Math.round(slowestResponse)}s`);
+  setText("metricDetectionAccuracy", `${detectionAccuracy}%`);
+  setText("metricAverageConfidence", `${avgConfidence}%`);
+  setText("metricFalsePositiveRate", `${falsePositive}%`);
+  setText("metricLivesSaved", livesSaved);
+  setText("metricGoldenHour", `${avgImprovement}%`);
+  setText("metricAgenciesNotified", agenciesNotified);
+  setText("peakAccidentTime", peakTimeLabel);
+  setText("accidentProneLocation", locationLabel);
+  setText("responsiveHospital", responsiveHospital);
+}
+
 function renderHistoryChart() {
   const canvasEl = document.getElementById("historyChart");
   if (!window.Chart || !canvasEl) return;
 
+  renderHistoryAnalytics();
+
   const dayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  const counts = [0, 0, 0, 0, 0, 0, 0];
-  state.incidents.forEach((incident) => {
-    const day = (incident.timestamp.getDay() + 6) % 7;
-    counts[day] += 1;
-  });
+const criticalCounts = [0, 0, 0, 0, 0, 0, 0];
+const majorCounts = [0, 0, 0, 0, 0, 0, 0];
+const minorCounts = [0, 0, 0, 0, 0, 0, 0];
+
+  const datasets = [
+    {
+      label: "Critical",
+      data: criticalCounts,
+      backgroundColor: "#dc2626",
+      borderWidth: 0,
+    },
+    {
+      label: "Major",
+      data: majorCounts,
+      backgroundColor: "#f59e0b",
+      borderWidth: 0,
+    },
+    {
+      label: "Minor",
+      data: minorCounts,
+      backgroundColor: "#3b82f6",
+      borderWidth: 0,
+    },
+  ];
 
   if (state.historyChart) {
     state.historyChart.data.labels = dayLabels;
-    state.historyChart.data.datasets[0].data = counts;
+    state.historyChart.data.datasets = datasets;
     state.historyChart.update();
     return;
   }
@@ -1123,26 +1406,97 @@ function renderHistoryChart() {
     type: "bar",
     data: {
       labels: dayLabels,
-      datasets: [{
-        label: "Incidents",
-        data: counts,
-        backgroundColor: "#e42929",
-        borderRadius: 12,
-      }],
+      datasets: datasets.map(ds => ({
+        ...ds,
+        borderRadius: 6,
+        borderSkipped: false,
+      })),
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
+      interaction: {
+        intersect: false,
+        mode: 'index',
+      },
+      plugins: {
+        legend: {
+          display: false,
+        },
+        tooltip: {
+          enabled: true,
+          backgroundColor: 'transparent',
+          padding: 0,
+          borderColor: 'transparent',
+          borderWidth: 0,
+          borderRadius: 0,
+          titleFont: {
+            size: 14,
+            weight: '700',
+            color: '#000000',
+          },
+          bodyFont: {
+            size: 13,
+            color: '#000000',
+            weight: '600',
+          },
+          titleSpacing: 0,
+          bodySpacing: 2,
+          displayColors: true,
+          boxPadding: 4,
+          boxWidth: 10,
+          boxHeight: 10,
+          xAlign: 'center',
+          yAlign: 'bottom',
+          callbacks: {
+            title: function(context) {
+              return context[0].label;
+            },
+            label: function(context) {
+              const count = context.parsed.y;
+              if (count === 0) return null;
+              return ` ${context.dataset.label}: ${count}`;
+            },
+            footer: function() {
+              return null;
+            },
+          },
+        },
+      },
       scales: {
         x: {
-          ticks: { color: "#97a1b3" },
-          grid: { display: false },
+          stacked: true,
+          ticks: {
+            color: "#9ca3af",
+            font: {
+              size: 12,
+              weight: '500',
+            },
+          },
+          grid: {
+            display: false,
+          },
         },
         y: {
+          stacked: true,
           beginAtZero: true,
-          ticks: { color: "#97a1b3", stepSize: 1 },
-          grid: { color: "rgba(255,255,255,0.08)" },
+          max: 4,
+          ticks: {
+            color: "#9ca3af",
+            stepSize: 1,
+            font: {
+              size: 12,
+              weight: '500',
+            },
+            callback: function(value) {
+              return value;
+            },
+          },
+          grid: {
+            color: 'rgba(31, 41, 55, 0.5)',
+            lineWidth: 1,
+            drawBorder: false,
+          },
         },
       },
     },
@@ -1194,6 +1548,15 @@ function setupUtilityEvents() {
     state.soundEnabled = !state.soundEnabled;
     showToast(state.soundEnabled ? "Sound alerts enabled" : "Sound alerts muted", "info");
   });
+  const clearHistoryBtn = document.getElementById("clearHistoryBtn");
+  if (clearHistoryBtn) {
+    clearHistoryBtn.addEventListener("click", () => {
+      state.incidents = [];
+      persistDashboardState();
+      renderAll();
+      showToast("History cleared", "info");
+    });
+  }
 }
 
 function startSessionTimer() {
@@ -1201,7 +1564,7 @@ function startSessionTimer() {
   if (!state.sessionStartedAt) state.sessionStartedAt = Date.now();
   state.sessionTimer = setInterval(() => {
     const seconds = (Date.now() - state.sessionStartedAt) / 1000;
-    clockBadge.title = `Session uptime ${formatTime(seconds)}`;
+    if (dateBadge) dateBadge.title = `Session uptime ${formatTime(seconds)}`;
   }, 1000);
 }
 
@@ -1224,8 +1587,8 @@ function setupHospitalPanelEvents() {
   });
 }
 
-function bootstrap() {
-  restoreDashboardState();
+async function bootstrap() {
+  await restoreDashboardState();
   setupNavigation();
   setupSidebarToggle();
   setupFilters();
@@ -1234,7 +1597,10 @@ function bootstrap() {
   setupHospitalPanelEvents();
   initMap();
   renderAll();
-  switchPage("live");
+  switchPage(state.lastPage || "live");
+  if (state.selectedIncidentId && state.lastPage === "hospital") {
+    selectIncident(state.selectedIncidentId);
+  }
   cycleClock();
   state.clockTimer = setInterval(cycleClock, 1000);
   startSessionTimer();
@@ -1244,7 +1610,11 @@ function bootstrap() {
   checkBackendHealth();
 }
 
-document.addEventListener("DOMContentLoaded", bootstrap);
+document.addEventListener("DOMContentLoaded", () => {
+  bootstrap().catch((error) => {
+    console.error("Bootstrap failed:", error);
+  });
+});
 
 window.openUpload = openUpload;
 window.startCamera = startCamera;
@@ -1255,3 +1625,68 @@ window.centerMap = centerMap;
 window.clearMapIncidents = clearMapIncidents;
 window.closeIncidentDetail = closeIncidentDetail;
 window.selectIncident = selectIncident;
+
+function viewIncidentFullDetail(uid) {
+  const incident = state.incidents.find((inc) => inc.uid === uid);
+  if (!incident) return;
+
+  // Title & Header
+  document.getElementById("fsIncidentTitle").textContent = `Incident ${incident.reference || incident.id} Details`;
+  const sevEl = document.getElementById("fsIncidentSeverity");
+  sevEl.textContent = incident.severity;
+  sevEl.className = `badge ${incident.severity}`;
+
+  // Left Panel data
+  document.getElementById("fsConfidence").textContent = `${incident.score}%`;
+  document.getElementById("fsTime").textContent = incident.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  document.getElementById("fsLocation").textContent = incident.locationLabel;
+  // Bounding box mock logic based on collision type
+  const v1 = document.getElementById("fsBbox1");
+  const v2 = document.getElementById("fsBbox2");
+  v1.style.top = Math.floor(Math.random()*(40-10)+10) + "%";
+  v1.style.left = Math.floor(Math.random()*(30-10)+10) + "%";
+  if (incident.type.toLowerCase().includes("collision") || incident.type.toLowerCase().includes("multiple")) {
+    v2.classList.remove("hidden");
+    v2.style.top = Math.floor(Math.random()*(50-15)+15) + "%";
+    v2.style.left = Math.floor(Math.random()*(85-50)+50) + "%";
+  } else {
+    v2.classList.add("hidden");
+  }
+
+  // Right Panel data
+  document.getElementById("fsRespTime").textContent = `${(Math.random()*(12.5-4.2)+4.2).toFixed(1)}s`;
+  const baseLoc = incident.locationLabel ? incident.locationLabel.split(",")[0] : "Central";
+  document.getElementById("fsPoliceName").textContent = `${baseLoc} Police Station`;
+  let acceptedHosp = "Pending Assignment";
+  if (incident.severity === "Critical") acceptedHosp = "KMCH Speciality Hospital";
+  else if (incident.severity === "Major") acceptedHosp = "Ganga Trauma Care";
+  else acceptedHosp = "Coimbatore Medical College";
+  document.getElementById("fsHospitalName").textContent = acceptedHosp;
+
+  // Show the available incident video clip when opening full details
+  const { sourceUrl, sourceFps } = resolveIncidentMedia(incident);
+  if (sourceUrl) {
+    const startTime = incident.frame_number ? Math.max(0, incident.frame_number / sourceFps) : 0;
+    showIncidentClip(sourceUrl, startTime);
+  } else {
+    hideIncidentClip();
+  }
+
+  // Hide sidebar and transition
+  if (dashboardShell) {
+    dashboardShell.classList.add("sidebar-collapsed");
+  }
+  
+  switchPage("incident-detail");
+}
+
+function closeIncidentFullDetail() {
+  if (window.innerWidth > 960 && dashboardShell) {
+    dashboardShell.classList.remove("sidebar-collapsed");
+  }
+  hideIncidentClip();
+  switchPage("alerts");
+}
+
+window.viewIncidentFullDetail = viewIncidentFullDetail;
+window.closeIncidentFullDetail = closeIncidentFullDetail;

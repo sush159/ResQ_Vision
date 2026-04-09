@@ -11,7 +11,7 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/style.css?v=2" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 
@@ -92,11 +92,6 @@
         </div>
       </div>
 
-      <div class="system-chip">
-        <span class="system-dot" id="statusDot"></span>
-        <span id="statusLabel">System Idle</span>
-      </div>
-
       <nav class="side-nav">
         <button class="nav-link active" data-page="live">
           <span class="nav-icon">Live</span>
@@ -116,8 +111,8 @@
           <span>Hospital Portal</span>
         </button>
         <button class="nav-link" data-page="history">
-          <span class="nav-icon">Logs</span>
-          <span>History & Logs</span>
+          <span class="nav-icon">Tracker</span>
+          <span>Progress Tracker</span>
         </button>
       </nav>
 
@@ -132,12 +127,12 @@
           </div>
         </div>
         <div class="topbar-right">
-          <div class="clock-badge" id="clockBadge">--</div>
+          <div class="clock-badge" id="dateBadge">--</div>
+          <div class="clock-badge" id="timeBadge">--</div>
         </div>
       </header>
 
       <section class="page page-active" data-page="live">
-        <div class="alert-strip" id="liveTicker">System standing by for video upload or live camera stream.</div>
 
         <div class="stats-grid" id="liveStats">
           <article class="stat-card accent">
@@ -181,6 +176,10 @@
               <p id="videoPanelSubtitle">Backend analysis stream</p>
             </div>
             <div class="panel-head-right">
+              <div class="system-chip" style="margin: 0; background: rgba(0,0,0,0.2);">
+                <span class="system-dot" id="statusDot"></span>
+                <span id="statusLabel">System Idle</span>
+              </div>
               <span class="rec-badge" id="recBadge">REC</span>
               <span class="fps-badge" id="fpsBadge">-- FPS</span>
             </div>
@@ -190,7 +189,6 @@
             <video id="uploadPreview" class="upload-preview hidden" muted playsinline></video>
             <canvas id="videoCanvas"></canvas>
             <div class="video-placeholder" id="placeholder">
-              <div class="placeholder-badge">Standby</div>
               <h3>Upload a video or start live camera</h3>
               <p>The backend will analyze the incoming stream and update the dashboard dynamically.</p>
             </div>
@@ -233,7 +231,6 @@
               <strong class="stat-value" id="falsePositiveRate">&lt;2%</strong>
             </article>
           </div>
-          <div class="live-indicator" id="dispatchIndicator">Auto-dispatch active</div>
         </div>
 
         <div class="filter-row" id="alertFilters">
@@ -244,6 +241,80 @@
         </div>
 
         <div class="stack-list" id="dispatchList"></div>
+      </section>
+
+      <section class="page incident-detail-page" data-page="incident-detail">
+        <div class="detail-topbar">
+          <button class="ghost-btn back-btn" type="button" onclick="closeIncidentFullDetail()">
+            &larr; Back
+          </button>
+          <h1 id="fsIncidentTitle">Incident #1 Details</h1>
+          <span class="badge" id="fsIncidentSeverity">Fatal</span>
+        </div>
+
+        <div class="incident-detail-grid">
+          <div class="detail-left-col">
+            <div class="panel video-clip-panel">
+              <div class="panel-head">
+                <div><span class="clip-icon">🎥</span> 30s Incident Clip</div>
+              </div>
+              <div class="clip-viewport">
+                <video id="incidentClip" class="incident-clip-video hidden" muted playsinline controls></video>
+                <div class="clip-overlay">
+                  <div class="bbox v-1" id="fsBbox1">Vehicle 1</div>
+                  <div class="bbox v-2 hidden" id="fsBbox2">Vehicle 2</div>
+                  <div class="clip-watermark">YOLOv8 + DeepSORT Feed</div>
+                  <div class="clip-bottom-left">Confidence: <span id="fsConfidence">94.2%</span></div>
+                  <div class="clip-bottom-right rec-blink">● REC</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="detail-minor-cards">
+              <div class="minor-card">
+                <span class="card-label">Time</span>
+                <strong class="card-val" id="fsTime">10:24 AM</strong>
+              </div>
+              <div class="minor-card">
+                <span class="card-label">Location</span>
+                <strong class="card-val" id="fsLocation">NH-44, Krishnagiri</strong>
+              </div>
+              <div class="minor-card">
+                <span class="card-label">Weather</span>
+                <strong class="card-val" id="fsWeather">Clear</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-right-col">
+
+            <div class="panel dispatch-panel">
+              <div class="panel-head">
+                <div><span class="dispatch-icon">🚨</span> Dispatch Status</div>
+              </div>
+              <div class="dispatch-statuses">
+                <div class="dispatch-row">
+                  <div class="d-agent-group">
+                    <span class="d-agent">🚓 Police</span>
+                    <span class="d-agent-name" id="fsPoliceName">Local Station</span>
+                  </div>
+                  <span class="d-state active">✓ Notified</span>
+                </div>
+                <div class="dispatch-row">
+                  <div class="d-agent-group">
+                    <span class="d-agent">🏥 Hospital</span>
+                    <span class="d-agent-name" id="fsHospitalName">General Hospital</span>
+                  </div>
+                  <span class="d-state active">✓ Notified</span>
+                </div>
+              </div>
+              <div class="dispatch-timing">
+                <div class="timing-lbl">Alert sent in</div>
+                <strong class="timing-val" id="fsRespTime">8.3s</strong>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section class="page hospital-page" data-page="hospital">
@@ -310,9 +381,8 @@
       <section class="page" data-page="map">
         <div class="map-header">
           <div class="map-legend">
-            <span><i class="legend-dot critical"></i> Accident Location</span>
-            <span><i class="legend-dot blue"></i> Police Station</span>
-            <span><i class="legend-dot green"></i> Hospital</span>
+            <span><i class="legend-dot critical"></i> Critical</span>
+            <span><i class="legend-dot major"></i> Major</span>
           </div>
           <div class="map-actions">
             <button class="tool-btn" type="button" onclick="centerMap()">Recenter</button>
@@ -325,56 +395,145 @@
       </section>
 
       <section class="page" data-page="history">
-        <div class="panel history-chart-panel">
+        <div class="panel history-dashboard-panel">
           <div class="panel-head">
             <div>
-              <h2>Incident Timeline & Impact</h2>
-              <p>Weekly activity, response quality, and historical incidents</p>
+              <p>Weekly activity, response quality, and incident workflow progress</p>
             </div>
           </div>
-          <div class="chart-wrap">
-            <canvas id="historyChart"></canvas>
+
+          <div class="history-dashboard-grid">
+            <div class="history-left-column">
+              <div class="stats-grid history-kpi-grid top-metrics-grid">
+                <article class="stat-card accent dashboard-card">
+                  <span class="stat-label">Total Accidents Detected</span>
+                  <strong class="stat-value" id="metricTotalAccidents">4</strong>
+                  <span class="stat-caption">Recorded this week</span>
+                </article>
+                <article class="stat-card blue dashboard-card">
+                  <span class="stat-label">Active Incidents</span>
+                  <strong class="stat-value" id="metricActiveIncidents">4</strong>
+                  <span class="stat-caption">Currently responding</span>
+                </article>
+                <article class="stat-card green dashboard-card">
+                  <span class="stat-label">Resolved Incidents</span>
+                  <strong class="stat-value" id="metricResolvedIncidents">0</strong>
+                  <span class="stat-caption">Closed cases</span>
+                </article>
+                <article class="stat-card amber dashboard-card">
+                  <span class="stat-label">Emergency Alerts Sent</span>
+                  <strong class="stat-value" id="metricAlertsSent">4</strong>
+                  <span class="stat-caption">Auto-notifications delivered</span>
+                </article>
+              </div>
+
+              <div class="chart-card panel">
+                <div class="panel-head">
+                  <div>
+                    <h3>Accidents Detected Per Day</h3>
+                    <p>Daily volume with severity classification</p>
+                  </div>
+                  <div class="chart-legend">
+                    <span><i class="legend-dot critical"></i> Critical</span>
+                    <span><i class="legend-dot major"></i> Major</span>
+                    <span><i class="legend-dot minor"></i> Minor</span>
+                  </div>
+                </div>
+                <div class="chart-wrap">
+                  <canvas id="historyChart"></canvas>
+                </div>
+              </div>
+
+              <div class="stats-grid history-impact-grid bottom-metrics-grid">
+                <article class="stat-card green metric-card">
+                  <div class="metric-header">
+                    <span class="stat-label">Detection Accuracy</span>
+                    <span class="trend-indicator positive"></span>
+                  </div>
+                  <strong class="stat-value" id="metricDetectionAccuracy">90%</strong>
+                </article>
+                <article class="stat-card blue metric-card">
+                  <div class="metric-header">
+                    <span class="stat-label">False Positive Rate</span>
+                    <span class="trend-indicator warning"></span>
+                  </div>
+                  <strong class="stat-value" id="metricFalsePositiveRate">13%</strong>
+                </article>
+                <article class="stat-card accent metric-card">
+                  <div class="metric-header">
+                    <span class="stat-label">Lives Potentially Saved</span>
+                    <span class="metric-icon"></span>
+                  </div>
+                  <strong class="stat-value" id="metricLivesSaved">11</strong>
+                </article>
+                <article class="stat-card amber metric-card">
+                  <div class="metric-header">
+                    <span class="stat-label">Golden Hour Improvement</span>
+                    <span class="metric-icon"></span>
+                  </div>
+                  <strong class="stat-value" id="metricGoldenHour">51%</strong>
+                </article>
+              </div>
+            </div>
+
+            <aside class="history-right-column panel insights-panel">
+              <div class="panel-head panel-head-right-panel">
+                <div>
+                  <h3>System Insights</h3>
+                  <p>Fast-moving patterns and responder efficiency</p>
+                </div>
+              </div>
+              <div class="insights-grid insights-stack">
+                <article class="insight-card importance-high">
+                  <span>Peak Accident Time</span>
+                  <strong id="peakAccidentTime">10:00 – 11:00</strong>
+                </article>
+                <div class="insight-divider"></div>
+                <article class="insight-card importance-medium">
+                  <span>Most Accident-Prone Location</span>
+                  <strong id="accidentProneLocation">Avinashi Road, CBE</strong>
+                </article>
+                <div class="insight-divider"></div>
+                <article class="insight-card importance-medium">
+                  <span>Most Responsive Hospital</span>
+                  <strong id="responsiveHospital">PSG Hospitals</strong>
+                </article>
+                <div class="insight-divider"></div>
+                <article class="insight-card importance-low">
+                  <span>Average Confidence Level</span>
+                  <strong id="metricAverageConfidence">47%</strong>
+                </article>
+              </div>
+
+              <div class="panel-head panel-head-right-panel small-heading">
+                <div>
+                  <h4>Response Time Performance</h4>
+                </div>
+              </div>
+              <div class="stats-grid history-performance-grid response-time-grid">
+                <article class="stat-card green response-card">
+                  <span class="stat-label">Fast</span>
+                  <strong class="stat-value" id="metricAvgResponseTime">11s</strong>
+                </article>
+                <article class="stat-card blue response-card">
+                  <span class="stat-label">Average</span>
+                  <strong class="stat-value" id="metricFastestResponseTime">8s</strong>
+                </article>
+                <article class="stat-card accent response-card">
+                  <span class="stat-label">Slow</span>
+                  <strong class="stat-value" id="metricSlowestResponseTime">14s</strong>
+                </article>
+              </div>
+            </aside>
           </div>
         </div>
-
-        <div class="stats-grid compact-stats">
-          <article class="stat-card green">
-            <span class="stat-label">Avg Response Time</span>
-            <strong class="stat-value" id="historyAvgResponse">0s</strong>
-            <span class="stat-caption">Calculated from incidents</span>
-          </article>
-          <article class="stat-card accent">
-            <span class="stat-label">Response Improvement</span>
-            <strong class="stat-value" id="historyImprovement">0%</strong>
-            <span class="stat-caption">Against manual baseline</span>
-          </article>
-          <article class="stat-card blue">
-            <span class="stat-label">False Positive Rate</span>
-            <strong class="stat-value">&lt;2%</strong>
-            <span class="stat-caption">Target threshold</span>
-          </article>
-          <article class="stat-card amber">
-            <span class="stat-label">Total Incidents</span>
-            <strong class="stat-value" id="historyTotalIncidents">0</strong>
-            <span class="stat-caption">All recorded</span>
-          </article>
-        </div>
-
-        <div class="filter-row" id="historyFilters">
-          <button class="filter-pill active" data-history-filter="all">All</button>
-          <button class="filter-pill" data-history-filter="Critical">Critical</button>
-          <button class="filter-pill" data-history-filter="Major">Major</button>
-          <button class="filter-pill" data-history-filter="Minor">Minor</button>
-        </div>
-
-        <div class="timeline" id="historyTimeline"></div>
       </section>
     </main>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="js/app.js"></script>
+  <script src="js/app.js?v=2"></script>
 </body>
 
 </html>

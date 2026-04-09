@@ -90,7 +90,7 @@ def _severity_from_detection(det: Detection) -> str:
 
 
 def _valid_collision_det(det: Detection, frame_area: float) -> bool:
-    if det.confidence < 0.30:
+    if det.confidence < 0.25:
         return False
     x1, y1, x2, y2 = det.bbox
     frac = max(0.0, (x2-x1)*(y2-y1)) / max(frame_area, 1.0)
@@ -102,10 +102,10 @@ class AccidentDetectionPipeline:
         self.detector = VehicleDetector(model_size="n", conf=0.25)
         self.tracker  = VehicleTracker(max_lost=20, iou_threshold=0.2)
         self.accident_detector = AccidentDetector(
-            iou_collision_threshold=0.35,
+            iou_collision_threshold=0.40,
             speed_drop_ratio=0.55,
-            min_speed_for_crash=4.0,
-            cooldown_frames=60,
+            min_speed_for_crash=5.0,
+            cooldown_frames=90,
         )
         self.frame_number = 0
         self._incident_counter = 0
@@ -123,9 +123,9 @@ class AccidentDetectionPipeline:
         self._collision_streak = 0
         self._gap_frames       = 0
         self._post_alert_cooldown = 0
-        self._STREAK_TO_FIRE   = 3      # 3 consecutive frames with collision class
+        self._STREAK_TO_FIRE   = 5      # 5 consecutive frames (~0.5s) before alerting
         self._MAX_GAP          = 3      # gap frames forgiven before streak reset
-        self._ALERT_COOLDOWN   = 5      # frames suppressed after alert
+        self._ALERT_COOLDOWN   = 20     # frames suppressed after alert
         self._severity_votes: List[str] = []  # votes across streak window
 
         # Vehicle type memory — remembers what was in the scene recently
@@ -226,6 +226,7 @@ class AccidentDetectionPipeline:
             involved = [t for t in active_tracks if t.track_id in incident.track_ids]
             bboxes = [t.bbox for t in involved] or [d.bbox for d in collision_dets] or [incident.bbox]
             incident.plates = read_plates_for_incident(enhanced, bboxes)
+            incident.fire_detected = self._detect_fire(enhanced, incident.bbox)
 
         annotated = self._annotate(enhanced, active_tracks, collision_dets, incident)
         return {
@@ -254,7 +255,7 @@ class AccidentDetectionPipeline:
 
         # COCO model — lower conf + larger imgsz to catch small/distant vehicles
         coco_res = self.detector.coco_model(
-            frame, conf=0.20, imgsz=480, verbose=False,
+            frame, conf=0.18, imgsz=640, verbose=False,
             classes=[0, 1, 2, 3, 5, 7],
         )[0]
 
@@ -278,7 +279,7 @@ class AccidentDetectionPipeline:
         frame_area = fw * fh
         if self.detector.custom_model is not None:
             custom_res = self.detector.custom_model(
-                frame, conf=0.30, imgsz=320, verbose=False,
+                frame, conf=0.25, imgsz=480, verbose=False,
             )[0]
             if custom_res.boxes is not None:
                 for box in custom_res.boxes:
@@ -323,7 +324,7 @@ class AccidentDetectionPipeline:
                     self._best_collision = best
                 self._severity_votes.append(_severity_from_detection(best))
                 self._collision_streak += 1
-                if self._collision_streak >= 3:
+                if self._collision_streak >= self._STREAK_TO_FIRE:
                     incident = self._incident_from_det(self._best_collision)
                     from collections import Counter
                     voted_sev = Counter(self._severity_votes).most_common(1)[0][0]
@@ -349,6 +350,7 @@ class AccidentDetectionPipeline:
             self._rederive_collision_type(incident, vehicle_dets, tracks)
             self.stats["total_incidents"] += 1
             self._post_alert_cooldown = self._ALERT_COOLDOWN
+            incident.fire_detected = self._detect_fire(frame, incident.bbox)
 
         annotated = self._annotate(frame, tracks, [], incident)
         return {
@@ -415,6 +417,38 @@ class AccidentDetectionPipeline:
         return [t for t in self._live_tracks.values() if t.frames_since_seen == 0]
 
     # ------------------------------------------------------------------ #
+    def _detect_fire(self, frame: np.ndarray, bbox: list) -> bool:
+        """
+        HSV color-based fire detection inside (and around) the incident bounding box.
+        Fire pixels are red-orange hues with high saturation and brightness.
+        Returns True if >5% of the region matches fire colors.
+        """
+        fh, fw = frame.shape[:2]
+        x1, y1, x2, y2 = [int(v) for v in bbox]
+        # Expand region by 50% to catch flames outside the collision box
+        pad_x = int((x2 - x1) * 0.5)
+        pad_y = int((y2 - y1) * 0.5)
+        x1 = max(0, x1 - pad_x)
+        y1 = max(0, y1 - pad_y)
+        x2 = min(fw, x2 + pad_x)
+        y2 = min(fh, y2 + pad_y)
+        if x2 <= x1 or y2 <= y1:
+            return False
+        roi = frame[y1:y2, x1:x2]
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        # Red-orange hue (H: 0-20), high saturation and brightness
+        lower1 = np.array([0,  120, 150])
+        upper1 = np.array([20, 255, 255])
+        # Wrap-around red (H: 160-180)
+        lower2 = np.array([160, 120, 150])
+        upper2 = np.array([180, 255, 255])
+        mask = cv2.bitwise_or(
+            cv2.inRange(hsv, lower1, upper1),
+            cv2.inRange(hsv, lower2, upper2),
+        )
+        fire_ratio = float(np.sum(mask > 0)) / max(roi.shape[0] * roi.shape[1], 1)
+        return fire_ratio > 0.05
+
     def _reset_collision_streak(self):
         self._collision_streak = 0
         self._best_collision   = None
@@ -442,24 +476,12 @@ class AccidentDetectionPipeline:
         active_tracks: list = None,
     ) -> None:
         """
-        Corrects the collision type label by looking at what vehicles were
-        actually involved.
-
-        Current-frame rule: vehicle must OVERLAP the incident bbox (IoU > 0.05).
-        This excludes spectator vehicles standing nearby that have no part in
-        the crash.
-
-        Hit-and-run fallback: if fewer than 2 overlapping vehicles are found,
-        search the position-aware memory for vehicles that were at the crash
-        location in recent frames (within HISTORY_RADIUS pixels of the crash
-        centre). This catches the fleeing car without pulling in unrelated
-        vehicles from other parts of the frame.
+        Corrects the collision type label using only vehicles visible in the
+        current frame that physically overlap the incident bounding box.
+        No memory fallback — stale vehicles from past frames must not
+        influence the collision type label.
         """
         from backend.tracker import iou as _iou
-
-        icx = (incident.bbox[0] + incident.bbox[2]) / 2
-        icy = (incident.bbox[1] + incident.bbox[3]) / 2
-        HISTORY_RADIUS = 200  # px — how close a past vehicle must have been
 
         def _apply_pair(names):
             for i in range(len(names)):
@@ -485,33 +507,16 @@ class AccidentDetectionPipeline:
             if len(track_names) >= 2 and _apply_pair(track_names):
                 return
 
-        # ── Priority 2: spatial search on current frame ──
-        # Vehicles that overlap the incident bbox OR whose centre is within
-        # HISTORY_RADIUS px of the crash centre (catches the motorcycle when
-        # it has partially left the collision bbox after impact).
+        # ── Priority 2: spatial search on current frame only ──
+        # Only vehicles whose bbox actually overlaps the incident bbox are
+        # considered involved — no distance radius, no memory fallback.
         involved = [
             d for d in vehicle_dets
-            if d.class_name != "person" and (
-                _iou(d.bbox, incident.bbox) > 0.02
-                or ((((d.bbox[0]+d.bbox[2])/2 - icx)**2 + ((d.bbox[1]+d.bbox[3])/2 - icy)**2)**0.5 < HISTORY_RADIUS)
-            )
+            if d.class_name != "person" and _iou(d.bbox, incident.bbox) > 0.05
         ]
 
         if len(involved) >= 2:
-            if _apply_pair([d.class_name for d in involved]):
-                return
-
-        # Hit-and-run fallback — only use memory entries from near the crash point
-        current_names = {d.class_name for d in involved}
-        nearby_history_names = {
-            name
-            for _, name, hx, hy in self._recent_vehicle_memory
-            if ((hx - icx) ** 2 + (hy - icy) ** 2) ** 0.5 < HISTORY_RADIUS
-            and name not in current_names
-        }
-        combined = list(current_names) + list(nearby_history_names)
-        if len(combined) >= 2:
-            _apply_pair(combined)
+            _apply_pair([d.class_name for d in involved])
 
     def _incident_from_det(self, det: Detection) -> Incident:
         severity = _severity_from_detection(det)
@@ -554,10 +559,10 @@ class AccidentDetectionPipeline:
     ) -> Optional[Incident]:
         from backend.tracker import iou as _iou
 
-        _IOU_LOW  = 0.30   # vehicles must substantially overlap — not just drive close
+        _IOU_LOW  = 0.32   # vehicles must substantially overlap — not just drive close
         _IOU_HIGH = 0.72   # above this = same object detected twice
-        _STREAK   = 4      # 4 consecutive frames of overlap required
-        _COOLDOWN = 60
+        _STREAK   = 6      # 6 consecutive frames of overlap required
+        _COOLDOWN = 90
 
         # Tick down cooldowns
         for k in list(self._proximity_cooldown):
@@ -673,16 +678,16 @@ class AccidentDetectionPipeline:
         baseline = float(np.mean(self._motion_buf[:-3]))
         recent   = float(np.mean(self._motion_buf[-3:]))
 
-        # Spike: recent motion is 2.5× above baseline AND above an absolute floor
-        # The absolute floor (15) prevents triggering on a completely still scene.
-        if recent < 15.0 or recent < baseline * 2.5:
+        # Spike: recent motion is 3.0× above baseline AND above an absolute floor
+        # The absolute floor (20) prevents triggering on a completely still scene.
+        if recent < 20.0 or recent < baseline * 3.0:
             return None
 
         # Triggered — find the most active vehicle region
         best_v = max(actual_vehicles, key=lambda v: v.confidence)
         severity = "Major"
         collision_type = f"sudden impact ({best_v.class_name})"
-        self._motion_cooldown = 90
+        self._motion_cooldown = 150
 
         return self._make_incident(severity, collision_type, best_v.bbox, min(recent / 255.0, 1.0))
 

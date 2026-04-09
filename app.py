@@ -22,6 +22,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.hospitals import HOSPITALS, find_nearby_hospitals
+from backend.notifier import notify_accident
 
 _pipeline_cls = None
 _upload_pipeline = None
@@ -116,6 +117,11 @@ async def warm_upload_pipeline():
 async def serve_dashboard():
     return HTMLResponse((FRONTEND_DIR / "index.html").read_text(encoding="utf-8"))
 
+
+@app.get("/api/test-call")
+async def test_call():
+    notify_accident({"incident_id": "TEST-001", "severity": "Critical", "collision_type": "car vs motorcycle"})
+    return {"status": "call triggered"}
 
 @app.get("/api/health")
 async def health_check():
@@ -326,6 +332,9 @@ async def websocket_camera(websocket: WebSocket):
             if result["alert"]:
                 incident = result["alert"]
 
+                # Always attempt a call — notifier cooldown prevents spam
+                notify_accident(incident)
+
                 # Initialize Incident State if new
                 iid = incident["incident_id"]
                 if iid not in incident_states:
@@ -335,7 +344,7 @@ async def websocket_camera(websocket: WebSocket):
                     nearby = find_nearby_hospitals(lat, lng)
                     incident_states[iid] = {
                         "incident_id": iid,
-                        "base_data": incident,
+                        "base_data": dict(incident),
                         "lat": lat,
                         "lng": lng,
                         "status": "Pending",
@@ -347,8 +356,6 @@ async def websocket_camera(websocket: WebSocket):
                             "message": "AI System detected potential accident"
                         }]
                     }
-                    incident["extended_state"] = incident_states[iid]
-
                 live_alerts.append(incident)
                 # Send alert directly on the camera WS (not just via broadcast)
                 # so the frontend always receives it on the same connection.
@@ -461,6 +468,7 @@ async def websocket_stream(websocket: WebSocket, job_id: str):
                 incident = result["alert"]
                 job["alerts"].append(incident)
                 msg["alert"] = incident
+                notify_accident(incident)
                 await websocket.send_json({"type": "alert", "incident": incident})
                 await websocket.send_json(msg)
                 break
@@ -567,6 +575,8 @@ def _analyze_video_file(path: Path, original_name: str) -> dict:
 
             preview_frame = result["annotated_frame"]
             if result["alert"]:
+                if not alerts:
+                    notify_accident(result["alert"])
                 alerts.append(result["alert"])
                 # Continue a few more seconds to catch any follow-up incidents,
                 # then stop to keep response time short.

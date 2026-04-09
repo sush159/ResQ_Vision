@@ -35,6 +35,7 @@ class Incident:
     timestamp: float = field(default_factory=time.time)
     frame_number: int = 0
     score: float = 0.0
+    fire_detected: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -49,6 +50,7 @@ class Incident:
             "timestamp": self.timestamp,
             "frame_number": self.frame_number,
             "score": round(self.score, 3),
+            "fire_detected": self.fire_detected,
         }
 
 

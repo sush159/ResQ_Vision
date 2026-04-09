@@ -1,4 +1,4 @@
-const LOCAL_API_BASE = "http://127.0.0.1:8000";
+const LOCAL_API_BASE = "http://127.0.0.1:8001";
 const API = resolveApiBase();
 const STORAGE_KEY = "resq-vision-dashboard-state";
 
@@ -761,10 +761,12 @@ function normalizeIncident(raw, meta = {}) {
   const time = raw.timestamp ? new Date(raw.timestamp * 1000) : new Date();
   const ref = raw.plates?.[0] || raw.incident_id || `INC-${String(index + 1).padStart(4, "0")}`;
   const responseTime = severity === "Critical" ? 8 : severity === "Major" ? 14 : 21;
+  const fireDetected = raw.fire_detected === true;
   const agencies = [
     { ...RESPONDERS.police, status: "Notified" },
     { ...RESPONDERS.ambulance, status: "Notified" },
     { ...RESPONDERS.hospital, status: severity === "Minor" ? "Pending" : "Notified" },
+    ...(fireDetected ? [{ label: "Fire Unit", color: "red", status: "Notified" }] : []),
   ];
   return {
     id: raw.incident_id || `INC-${String(index + 1).padStart(4, "0")}`,
@@ -782,6 +784,7 @@ function normalizeIncident(raw, meta = {}) {
     responseTime,
     improvement: severity === "Critical" ? 58 : severity === "Major" ? 44 : 31,
     autoEscalated: severity !== "Minor",
+    fireDetected,
     raw,
   };
 }
@@ -1166,7 +1169,13 @@ function showEmergencyModal(incident) {
   document.getElementById("emergencyType").textContent = incident.type;
   document.getElementById("ambEta").textContent = `ETA ${Math.max(2, Math.round(incident.responseTime / 3))} min`;
   document.getElementById("polEta").textContent = `ETA ${Math.max(1, Math.round(incident.responseTime / 4))} min`;
-  document.getElementById("fireEta").textContent = incident.severity === "Critical" ? "ETA 4 min" : "Standby";
+  const fireUnit = document.getElementById("fireUnit");
+  if (fireUnit) {
+    fireUnit.style.display = incident.fireDetected ? "" : "none";
+    if (incident.fireDetected) {
+      document.getElementById("fireEta").textContent = "ETA 4 min";
+    }
+  }
   document.getElementById("emergencyScorePct").textContent = `${incident.score}%`;
   document.getElementById("emergencyScoreBar").style.width = `${incident.score}%`;
 }

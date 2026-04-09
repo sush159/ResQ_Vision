@@ -22,6 +22,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.hospitals import HOSPITALS, find_nearby_hospitals
+from backend.notifier import notify_accident
 
 _pipeline_cls = None
 _upload_pipeline = None
@@ -52,9 +53,9 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 ALLOWED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
 MAX_UPLOAD_BYTES = 500 * 1024 * 1024
 DEFAULT_TARGET_FPS = 10
-UPLOAD_TARGET_FPS = 8
-UPLOAD_MAX_WIDTH = 512
-UPLOAD_MAX_PROCESSED_FRAMES = 240
+UPLOAD_TARGET_FPS = 10
+UPLOAD_MAX_WIDTH = 960
+UPLOAD_MAX_PROCESSED_FRAMES = 300
 UPLOAD_STREAM_TARGET_FPS = 12
 
 # Active job registry: job_id -> {status, path, alerts, filename}
@@ -116,6 +117,11 @@ async def warm_upload_pipeline():
 async def serve_dashboard():
     return HTMLResponse((FRONTEND_DIR / "index.html").read_text(encoding="utf-8"))
 
+
+@app.get("/api/test-call")
+async def test_call():
+    notify_accident({"incident_id": "TEST-001", "severity": "Critical", "collision_type": "car vs motorcycle"})
+    return {"status": "call triggered"}
 
 @app.get("/api/health")
 async def health_check():
@@ -310,11 +316,9 @@ async def websocket_camera(websocket: WebSocket):
                 continue
 
             frame_idx += 1
-            if frame_idx % 2 != 0:
-                continue
 
-            frame = _resize_frame(frame, max_width=720)
-            result = pipeline.process_frame(frame)
+            frame = _resize_frame(frame, max_width=640)
+            result = pipeline.process_frame_live(frame)
 
             response = {
                 "type": "frame",
@@ -327,19 +331,20 @@ async def websocket_camera(websocket: WebSocket):
 
             if result["alert"]:
                 incident = result["alert"]
-                
+
+                # Always attempt a call — notifier cooldown prevents spam
+                notify_accident(incident)
+
                 # Initialize Incident State if new
                 iid = incident["incident_id"]
                 if iid not in incident_states:
-                    # Mocking Coimbatore-centric location if not provided
-                    # Backend provides frame-relative center, we map it to Coimbatore bounds
-                    lat = 11.0168 + (uuid.uuid4().int % 1000) / 50000 
+                    lat = 11.0168 + (uuid.uuid4().int % 1000) / 50000
                     lng = 76.9558 + (uuid.uuid4().int % 1000) / 50000
-                    
+
                     nearby = find_nearby_hospitals(lat, lng)
                     incident_states[iid] = {
                         "incident_id": iid,
-                        "base_data": incident,
+                        "base_data": dict(incident),
                         "lat": lat,
                         "lng": lng,
                         "status": "Pending",
@@ -351,9 +356,10 @@ async def websocket_camera(websocket: WebSocket):
                             "message": "AI System detected potential accident"
                         }]
                     }
-                    incident["extended_state"] = incident_states[iid]
-
                 live_alerts.append(incident)
+                # Send alert directly on the camera WS (not just via broadcast)
+                # so the frontend always receives it on the same connection.
+                response["alert"] = incident
                 await broadcast_status({"type": "alert", "incident": incident})
 
             await websocket.send_json(response)
@@ -421,6 +427,9 @@ async def websocket_stream(websocket: WebSocket, job_id: str):
     pipeline.reset_session()
     frame_idx = 0
     processed_frames = 0
+    skip_frames = int(src_fps * 3)
+
+    print(f"[UPLOAD] Starting: total={total_frames} fps={src_fps} frame_skip={frame_skip} skip_frames={skip_frames}")
 
     try:
         while cap.isOpened():
@@ -429,6 +438,10 @@ async def websocket_stream(websocket: WebSocket, job_id: str):
                 break
 
             frame_idx += 1
+
+            if frame_idx <= skip_frames:
+                continue
+
             if frame_idx % frame_skip != 0:
                 continue
 
@@ -439,7 +452,7 @@ async def websocket_stream(websocket: WebSocket, job_id: str):
             processed_frames += 1
 
             frame = _resize_frame(frame, max_width=UPLOAD_MAX_WIDTH)
-            result = pipeline.process_frame_fast(frame)
+            result = pipeline.process_frame(frame)
             progress = round(frame_idx / max(total_frames, 1) * 100, 1)
 
             msg = {
@@ -454,6 +467,8 @@ async def websocket_stream(websocket: WebSocket, job_id: str):
             if result["alert"]:
                 incident = result["alert"]
                 job["alerts"].append(incident)
+                msg["alert"] = incident
+                notify_accident(incident)
                 await websocket.send_json({"type": "alert", "incident": incident})
                 await websocket.send_json(msg)
                 break
@@ -530,6 +545,9 @@ def _analyze_video_file(path: Path, original_name: str) -> dict:
     processed_frames = 0
     last_timestamp = 0.0
 
+    # Skip the first 3 seconds — ads or non-scene content at the start cause false positives.
+    skip_frames = int(src_fps * 3)
+
     try:
         frame_idx = 0
         while cap.isOpened():
@@ -538,6 +556,11 @@ def _analyze_video_file(path: Path, original_name: str) -> dict:
                 break
 
             frame_idx += 1
+
+            # Skip intro frames before starting detection
+            if frame_idx <= skip_frames:
+                continue
+
             if frame_idx % frame_skip != 0:
                 continue
 
@@ -548,12 +571,17 @@ def _analyze_video_file(path: Path, original_name: str) -> dict:
             processed_frames += 1
             last_timestamp = round(frame_idx / src_fps, 2)
             frame = _resize_frame(frame, max_width=UPLOAD_MAX_WIDTH)
-            result = pipeline.process_frame_fast(frame)
+            result = pipeline.process_frame(frame)
 
             preview_frame = result["annotated_frame"]
             if result["alert"]:
+                if not alerts:
+                    notify_accident(result["alert"])
                 alerts.append(result["alert"])
-                break
+                # Continue a few more seconds to catch any follow-up incidents,
+                # then stop to keep response time short.
+                if processed_frames >= UPLOAD_MAX_PROCESSED_FRAMES or len(alerts) >= 3:
+                    break
             if processed_frames >= UPLOAD_MAX_PROCESSED_FRAMES:
                 break
     finally:

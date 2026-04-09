@@ -1,4 +1,4 @@
-const LOCAL_API_BASE = "http://127.0.0.1:8000";
+const LOCAL_API_BASE = "http://127.0.0.1:8001";
 const API = resolveApiBase();
 const STORAGE_KEY = "resq-vision-dashboard-state";
 
@@ -572,9 +572,16 @@ function handleUploadStreamMessage(msg, uploadId) {
   }
 
   if (msg.type === "frame") {
+    if (msg.frame) drawFrame(msg.frame);
     if (msg.stats) updateFeedStats(msg.stats);
     if (typeof msg.progress === "number" && msg.progress >= 0) progressFill.style.width = `${msg.progress}%`;
     if (typeof msg.timestamp === "number") timestampBadge.textContent = formatTime(msg.timestamp);
+    if (msg.alert && !state.uploadAlertTriggered) {
+      state.uploadAlertTriggered = true;
+      pauseUploadAtIncident(msg.alert);
+      ingestIncident(msg.alert, { source: sourceName || "Uploaded video", fromLive: false });
+      liveTicker.textContent = "Accident detected. Playback paused and emergency workflow triggered.";
+    }
     return;
   }
 
@@ -791,6 +798,10 @@ function handleRealtimeMessage(msg, meta = {}) {
     if (typeof msg.timestamp === "number") timestampBadge.textContent = formatTime(msg.timestamp);
     enhancementBadge.style.display = msg.enhancement_mode && msg.enhancement_mode !== "Normal" ? "block" : "none";
     enhancementBadge.textContent = msg.enhancement_mode || "";
+    // Alert may be embedded directly in frame message as a fallback
+    if (msg.alert) {
+      ingestIncident(msg.alert, { source: meta.source || "Live feed", fromLive: true });
+    }
     return;
   }
 
@@ -947,12 +958,13 @@ function normalizeIncident(raw, meta = {}) {
   const time = raw.timestamp ? new Date(raw.timestamp * 1000) : new Date();
   const ref = raw.plates?.[0] || raw.incident_id || `INC-${String(index + 1).padStart(4, "0")}`;
   const responseTime = severity === "Critical" ? 8 : severity === "Major" ? 14 : 21;
+  const fireDetected = raw.fire_detected === true;
   const agencies = [
     { ...RESPONDERS.police, status: "Notified" },
     { ...RESPONDERS.ambulance, status: "Notified" },
     { ...RESPONDERS.hospital, status: severity === "Minor" ? "Pending" : "Notified" },
+    ...(fireDetected ? [{ label: "Fire Unit", color: "red", status: "Notified" }] : []),
   ];
-
   return {
     id: raw.incident_id || `INC-${String(index + 1).padStart(4, "0")}`,
     uid: `uid-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
@@ -973,7 +985,14 @@ function normalizeIncident(raw, meta = {}) {
     responseTime,
     improvement: severity === "Critical" ? 58 : severity === "Major" ? 44 : 31,
     autoEscalated: severity !== "Minor",
-    frame_number: raw.frame_number || raw.frame || null,
+agencies,
+responseTime,
+improvement: severity === "Critical" ? 58 : severity === "Major" ? 44 : 31,
+autoEscalated: severity !== "Minor",
+frame_number: raw.frame_number || raw.frame || null,
+fireDetected,
+raw,
+};
     raw,
   };
 }
@@ -981,7 +1000,7 @@ function normalizeIncident(raw, meta = {}) {
 function ingestIncident(raw, meta = {}) {
   const incident = normalizeIncident(raw, meta);
   state.incidents.unshift(incident);
-  if (incident.severity === "Critical" || incident.severity === "Major") {
+  if (incident.severity === "Major" || incident.severity === "Critical") {
     showEmergencyModal(incident);
   }
   triggerAlertEffects(incident);
@@ -991,7 +1010,6 @@ function ingestIncident(raw, meta = {}) {
 }
 
 function triggerAlertEffects(incident) {
-  if (!state.soundEnabled) return;
   const flash = document.getElementById("screenFlash");
   flash.className = `screen-flash ${incident.severity}`;
   setTimeout(() => {
@@ -1511,7 +1529,13 @@ function showEmergencyModal(incident) {
   document.getElementById("emergencyType").textContent = incident.type;
   document.getElementById("ambEta").textContent = `ETA ${Math.max(2, Math.round(incident.responseTime / 3))} min`;
   document.getElementById("polEta").textContent = `ETA ${Math.max(1, Math.round(incident.responseTime / 4))} min`;
-  document.getElementById("fireEta").textContent = incident.severity === "Critical" ? "ETA 4 min" : "Standby";
+  const fireUnit = document.getElementById("fireUnit");
+  if (fireUnit) {
+    fireUnit.style.display = incident.fireDetected ? "" : "none";
+    if (incident.fireDetected) {
+      document.getElementById("fireEta").textContent = "ETA 4 min";
+    }
+  }
   document.getElementById("emergencyScorePct").textContent = `${incident.score}%`;
   document.getElementById("emergencyScoreBar").style.width = `${incident.score}%`;
 }

@@ -692,6 +692,7 @@ async function startCamera() {
   }
 
   state.cameraMode = true;
+  state.cameraWaitingForAck = false;
   state.sessionStartedAt = Date.now();
   startSessionTimer();
   videoPanelTitle.textContent = "Live Camera Feed";
@@ -705,7 +706,10 @@ async function startCamera() {
   state.cameraVideo.autoplay = true;
   state.cameraVideo.playsInline = true;
   state.cameraVideo.muted = true;
+  // Fix canvas size once to avoid repeated DOM layout recalculations
   state.captureCanvas = document.createElement("canvas");
+  state.captureCanvas.width = 640;
+  state.captureCanvas.height = 360;
 
   state.ws = new WebSocket(`${resolveWsBase()}/ws/camera`);
   state.ws.onmessage = (event) => {
@@ -714,9 +718,14 @@ async function startCamera() {
       setStatus("active", "Live Camera");
       enhancementBadge.style.display = "none";
       state.cameraVideo.play().then(() => {
-        state.captureTimer = setInterval(sendCameraFrame, 120);
+        // Kick off the ack-based loop with a small initial delay
+        state.captureTimer = setTimeout(sendCameraFrame, 50);
       });
       return;
+    }
+    // Backend responded — unblock so we can send the next frame
+    if (msg.type === "frame") {
+      state.cameraWaitingForAck = false;
     }
     handleRealtimeMessage(msg, { source: "Live Camera", live: true });
   };
@@ -725,22 +734,33 @@ async function startCamera() {
 }
 
 function sendCameraFrame() {
+  if (!state.cameraMode) return;
   if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
-  if (!state.cameraVideo || state.cameraVideo.readyState < 2) return;
-  const w = state.cameraVideo.videoWidth || 960;
-  const h = state.cameraVideo.videoHeight || 540;
-  state.captureCanvas.width = w;
-  state.captureCanvas.height = h;
-  state.captureCanvas.getContext("2d").drawImage(state.cameraVideo, 0, 0, w, h);
+  if (!state.cameraVideo || state.cameraVideo.readyState < 2) {
+    // Video not ready yet — retry shortly
+    state.captureTimer = setTimeout(sendCameraFrame, 80);
+    return;
+  }
+  if (state.cameraWaitingForAck) {
+    // Backend still processing previous frame — retry shortly instead of queuing
+    state.captureTimer = setTimeout(sendCameraFrame, 40);
+    return;
+  }
+  state.cameraWaitingForAck = true;
+  state.captureCanvas.getContext("2d").drawImage(state.cameraVideo, 0, 0, 640, 360);
   state.ws.send(JSON.stringify({
     type: "frame",
-    frame: state.captureCanvas.toDataURL("image/jpeg", 0.72).split(",")[1],
+    frame: state.captureCanvas.toDataURL("image/jpeg", 0.65).split(",")[1],
   }));
+  // Schedule next frame check — ack will also trigger unblock
+  state.captureTimer = setTimeout(sendCameraFrame, 50);
 }
 
 function stopCameraSession() {
+  clearTimeout(state.captureTimer);
   clearInterval(state.captureTimer);
   state.captureTimer = null;
+  state.cameraWaitingForAck = false;
   if (state.cameraStream) {
     state.cameraStream.getTracks().forEach((track) => track.stop());
     state.cameraStream = null;
@@ -985,14 +1005,8 @@ function normalizeIncident(raw, meta = {}) {
     responseTime,
     improvement: severity === "Critical" ? 58 : severity === "Major" ? 44 : 31,
     autoEscalated: severity !== "Minor",
-agencies,
-responseTime,
-improvement: severity === "Critical" ? 58 : severity === "Major" ? 44 : 31,
-autoEscalated: severity !== "Minor",
-frame_number: raw.frame_number || raw.frame || null,
-fireDetected,
-raw,
-};
+    frame_number: raw.frame_number || raw.frame || null,
+    fireDetected,
     raw,
   };
 }

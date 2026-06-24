@@ -151,17 +151,14 @@ class AccidentDetector:
         drop_b = max(0.0, min(1.0, drop_b))
         speed_signal = max(drop_a, drop_b)
 
-speed_signal = max(drop_a, drop_b)
+        # Require substantial overlap (0.40 IoU) before overlap contributes fully.
+        # Prevents two cars driving close from triggering false positives.
+        overlap_signal = min(1.0, overlap / 0.40)
 
-# Require substantial overlap (0.40 IoU) before overlap contributes fully.
-# Prevents two cars driving close from triggering false positives.
-overlap_signal = min(1.0, overlap / 0.40)
+        # Reweighted: overlap + approach carry the collision signal;
+        # speed drop boosts severity but is not required to fire.
+        score = 0.30 * speed_signal + 0.45 * overlap_signal + 0.25 * approach_vel
 
-# Reweighted: overlap + approach carry the collision signal;
-# speed drop boosts severity but is not required to fire.
-score = 0.30 * speed_signal + 0.45 * overlap_signal + 0.25 * approach_vel
-
-return float(np.clip(score, 0.0, 1.0))
         return float(np.clip(score, 0.0, 1.0))
 
     def detect(

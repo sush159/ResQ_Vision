@@ -49,9 +49,8 @@ def _make_call(incident: dict) -> None:
             language="en-IN",
         )
 
-        client = Client(ACCOUNT_SID, AUTH_TOKEN)
+        client = Client(account_sid, auth_token)
         call = client.calls.create(
-            twiml=str(vr),
             to=TO_NUMBER,
             from_=FROM_NUMBER,
         )

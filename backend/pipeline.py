@@ -273,13 +273,13 @@ class AccidentDetectionPipeline:
                     color=VEHICLE_COLORS.get(name, DEFAULT_CLASS_COLORS[cid % len(DEFAULT_CLASS_COLORS)]),
                 ))
 
-        # Custom model every frame at lower resolution for consistent detection
+        # Custom model every 2 frames — collision needs a 5-frame streak anyway
         collision_dets: List[Detection] = []
         fh, fw = frame.shape[:2]
         frame_area = fw * fh
-        if self.detector.custom_model is not None:
+        if self.detector.custom_model is not None and self.frame_number % 2 == 0:
             custom_res = self.detector.custom_model(
-                frame, conf=0.25, imgsz=480, verbose=False,
+                frame, conf=0.25, imgsz=416, verbose=False,
             )[0]
             if custom_res.boxes is not None:
                 for box in custom_res.boxes:

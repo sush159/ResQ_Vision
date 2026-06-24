@@ -317,12 +317,12 @@ async def websocket_camera(websocket: WebSocket):
 
             frame_idx += 1
 
-            frame = _resize_frame(frame, max_width=640)
-            result = pipeline.process_frame_live(frame)
+            frame = _resize_frame(frame, max_width=480)
+            result = await asyncio.to_thread(pipeline.process_frame_live, frame)
 
             response = {
                 "type": "frame",
-                "frame": _encode_frame(result["annotated_frame"], quality=72),
+                "frame": _encode_frame(result["annotated_frame"], quality=60),
                 "stats": result["stats"],
                 "enhancement_mode": result["enhancement_mode"],
                 "timestamp": round(frame_idx / 30, 2),
